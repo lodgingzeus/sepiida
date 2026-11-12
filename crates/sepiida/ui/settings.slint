@@ -1,0 +1,41 @@
+import { VerticalBox, HorizontalBox, Switch } from "std-widgets.slint";
+
+export global Theme {
+    in-out property <color> accent: #c86fc9;
+    in-out property <color> surface: #1c1b1f;
+    in-out property <color> on-surface: #e6e1e5;
+}
+
+component Swatch inherits Rectangle {
+    height: 48px;
+    border-radius: 8px;
+    animate background { duration: 400ms; easing: ease-in-out; }
+}
+
+export component SettingsWindow inherits Window {
+    title: "sepiida";
+    preferred-width: 420px;
+    preferred-height: 260px;
+    background: Theme.surface;
+
+    in-out property <bool> glass-enabled: false;
+
+    VerticalBox {
+        Text {
+            text: "sepiida";
+            font-size: 24px;
+            color: Theme.on-surface;
+        }
+        HorizontalBox {
+            padding: 0;
+            Swatch { background: Theme.accent; }
+            Swatch { background: Theme.surface; border-width: 1px; border-color: Theme.on-surface; }
+            Swatch { background: Theme.on-surface; }
+        }
+        Switch {
+            text: "Glass effect (experimental)";
+            checked <=> root.glass-enabled;
+        }
+        Rectangle { }
+    }
+}

@@ -1,0 +1,35 @@
+# sepiida
+
+An adaptive theming engine for the Windows shell. sepiida reads the wallpaper
+shown by [Wallpaper Engine](https://www.wallpaperengine.io/), derives a colour
+palette from it, and applies it to Windows itself: accent colour, light/dark
+mode, taskbar, Start menu and File Explorer. Ordinary applications are left
+alone.
+
+> **Status: early development.** Only palette extraction works today. Later
+> versions load a DLL into Windows shell processes; until that is stable,
+> expect it to be able to crash or restart Explorer.
+
+## Building
+
+Development happens on Linux with [Nix](https://nixos.org/) and cross-compiles
+to Windows:
+
+```sh
+nix develop
+cargo test --workspace
+cargo run -p sepiida -- palette path/to/image.png
+cargo xwin build --workspace --release --target x86_64-pc-windows-msvc
+```
+
+The first cross-build downloads the Microsoft CRT and Windows SDK through
+`cargo-xwin`, which means accepting Microsoft's licence terms for them.
+
+On Windows, install Rust with `rustup` and run `cargo build --release`.
+
+Every push to `main` also builds a Windows artifact (`sepiida-windows-x64`) in
+GitHub Actions.
+
+## Licence
+
+GPL-3.0-only. See [LICENSE](LICENSE).

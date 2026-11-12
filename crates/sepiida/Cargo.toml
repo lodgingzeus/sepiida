@@ -1,0 +1,18 @@
+[package]
+name = "sepiida"
+description = "Adaptive desktop theming engine for Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sepiida-core.workspace = true
+anyhow.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+slint.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true
