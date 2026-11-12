@@ -59,21 +59,30 @@ pub fn run() -> Result<()> {
     let worker = thread::Builder::new()
         .name("agent".to_owned())
         .spawn(move || {
-            if let Err(error) = agent_loop(paths, &receiver, worker_events) {
+            let result = agent_loop(paths, &receiver, worker_events);
+            if let Err(error) = &result {
                 error!("agent stopped: {error:#}");
             }
             // However the loop ended, take the tray down with it.
             let _ = slint::quit_event_loop();
+            result
         })
         .context("could not start the agent thread")?;
 
     // The tray keeps the loop alive; it returns after "Quit".
     let ui_result = slint::run_event_loop_until_quit();
+    // Drop the tray and any settings window here, on the event-loop thread
+    // and while Slint is still set up, not in thread-local destructors at
+    // exit.
+    tray::shut_down();
     let _ = events.send(Event::Quit);
-    if worker.join().is_err() {
-        error!("the agent thread panicked");
-    }
+    let worker_result = worker
+        .join()
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("the agent thread panicked")));
     info!("agent stopped");
+    // A failed agent (for example a watcher that could not start) is
+    // reported, so sepiidaw.exe shows it instead of vanishing.
+    worker_result?;
     ui_result.context("the tray icon stopped")?;
     Ok(())
 }

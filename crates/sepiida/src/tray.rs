@@ -46,6 +46,13 @@ pub fn start(events: Sender<Event>, paths: Paths) -> Result<()> {
     Ok(())
 }
 
+/// Removes the tray icon and closes the settings window. Call on the
+/// event-loop thread after the loop has returned.
+pub fn shut_down() {
+    let ui = UI.with_borrow_mut(Option::take);
+    drop(ui);
+}
+
 /// Recolours the tray icon and refreshes an open settings window, after
 /// an apply. Callable from any thread.
 pub fn show_accent(accent: Color) {
