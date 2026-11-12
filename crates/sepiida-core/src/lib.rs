@@ -1,13 +1,17 @@
 //! Platform-independent colour engine: wallpaper image in, palette out.
 
 pub mod accent;
+pub mod cache;
+pub mod config;
+mod fsio;
 pub mod source;
 pub mod wallpaper_engine;
 
-use std::{fmt, path::Path};
+use std::{fmt, path::Path, str::FromStr};
 
 use image::{DynamicImage, ImageReader, imageops::FilterType};
 use material_colors::{color::Rgb, image::extract_color, scheme::Scheme, theme::ThemeBuilder};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 /// Quantization time grows with pixel count and the result barely changes
 /// above this size, so every image is shrunk to fit this box first.
@@ -37,6 +41,40 @@ impl fmt::Display for Color {
 impl Color {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("invalid colour `{0}`; expected #rrggbb")]
+pub struct InvalidColor(String);
+
+/// Parses `#rrggbb`, the format `Display` writes. Hex digits may be upper or
+/// lower case.
+impl FromStr for Color {
+    type Err = InvalidColor;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let invalid = || InvalidColor(s.to_owned());
+        let hex = s.strip_prefix('#').ok_or_else(invalid)?;
+        if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(invalid());
+        }
+        // Six ASCII hex digits, so every two-byte slice is a valid number.
+        let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| invalid());
+        Ok(Self::new(channel(0)?, channel(2)?, channel(4)?))
+    }
+}
+
+impl Serialize for Color {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Color {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(de::Error::custom)
     }
 }
 
@@ -145,6 +183,33 @@ mod tests {
             .to_string(),
             "#c86f09"
         );
+    }
+
+    #[test]
+    fn color_parses_what_it_formats() {
+        let color = Color::new(200, 111, 9);
+        assert_eq!(color.to_string().parse(), Ok(color));
+        assert_eq!("#C86F09".parse(), Ok(color));
+        for bad in [
+            "",
+            "#",
+            "c86f09",
+            "#c86f0",
+            "#c86f091",
+            "#c86f0g",
+            "#+1+2+3",
+            "#c86f\u{e9}",
+        ] {
+            assert!(bad.parse::<Color>().is_err(), "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn palette_from_the_source_colour_matches_the_image_palette() {
+        // The palette cache stores only the source colour and rebuilds the
+        // rest from it, which is only correct if this holds.
+        let from_image = Palette::from_image(&solid(200, 111, 201));
+        assert_eq!(Palette::from_color(from_image.source), from_image);
     }
 
     #[test]

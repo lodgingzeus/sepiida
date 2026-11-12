@@ -1,6 +1,8 @@
 #[cfg(windows)]
 mod apply;
 mod cli;
+#[cfg(any(windows, test))]
+mod paths;
 #[cfg(windows)]
 mod win;
 
@@ -51,7 +53,7 @@ fn apply(_options: ApplyOptions) -> Result<()> {
 
 #[cfg(windows)]
 fn apply(options: ApplyOptions) -> Result<()> {
-    apply::run(options)
+    apply::run_cli(options)
 }
 
 #[cfg(windows)]

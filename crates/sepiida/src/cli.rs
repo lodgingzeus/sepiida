@@ -1,6 +1,6 @@
 //! Command-line parsing. Kept free of side effects so it can be tested.
 
-use sepiida_core::{accent::ThemeMode, source::SourceChoice};
+use sepiida_core::{Color, accent::ThemeMode, config::Config, source::SourceChoice};
 
 pub const USAGE: &str = "\
 usage:
@@ -9,9 +9,12 @@ usage:
   sepiida apply [options]          theme Windows from the current wallpaper
 
 apply options:
-  --source auto|windows|wallpaper-engine   where to read the wallpaper (default: auto)
-  --mode light|dark                        also switch light/dark mode (default: leave as is)
-  --dry-run                                print what would change without changing it";
+  --source auto|windows|wallpaper-engine   where to read the wallpaper (default: from settings)
+  --mode light|dark                        also switch light/dark mode (default: from settings)
+  --dry-run                                print what would change without changing it
+
+`apply` follows the settings file: a locked colour is used instead of the
+wallpaper, and nothing is written for features that are turned off.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -21,12 +24,42 @@ pub enum Command {
     Apply(ApplyOptions),
 }
 
+/// What was given on the command line. `None` means "use the setting".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ApplyOptions {
+    pub source: Option<SourceChoice>,
+    pub mode: Option<ThemeMode>,
+    pub dry_run: bool,
+}
+
+/// The settings one `apply` runs with: the settings file, overridden by
+/// whatever was given on the command line.
+#[cfg_attr(
+    not(windows),
+    allow(dead_code, reason = "`apply` only runs on Windows")
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApplySettings {
     pub source: SourceChoice,
     /// `None` leaves the user's light/dark setting alone.
     pub mode: Option<ThemeMode>,
-    pub dry_run: bool,
+    pub accent: bool,
+    pub locked_color: Option<Color>,
+}
+
+impl ApplyOptions {
+    #[cfg_attr(
+        not(windows),
+        allow(dead_code, reason = "`apply` only runs on Windows")
+    )]
+    pub fn settings(&self, config: &Config) -> ApplySettings {
+        ApplySettings {
+            source: self.source.unwrap_or(config.source),
+            mode: self.mode.or(config.mode.theme_mode()),
+            accent: config.accent,
+            locked_color: config.locked_color,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -97,7 +130,7 @@ fn parse_apply(args: &[&str]) -> Result<ApplyOptions, CliError> {
     }
 
     Ok(ApplyOptions {
-        source: source.unwrap_or_default(),
+        source,
         mode,
         dry_run,
     })
@@ -142,11 +175,52 @@ mod tests {
     }
 
     #[test]
-    fn apply_defaults_to_auto_and_leaves_the_mode_alone() {
+    fn apply_without_options_defers_to_the_settings() {
         assert_eq!(apply(&["apply"]), Ok(ApplyOptions::default()));
-        assert_eq!(ApplyOptions::default().source, SourceChoice::Auto);
+        assert_eq!(ApplyOptions::default().source, None);
         assert_eq!(ApplyOptions::default().mode, None);
         assert!(!ApplyOptions::default().dry_run);
+    }
+
+    #[test]
+    fn default_settings_use_auto_and_leave_the_mode_alone() {
+        let settings = ApplyOptions::default().settings(&Config::default());
+        assert_eq!(
+            settings,
+            ApplySettings {
+                source: SourceChoice::Auto,
+                mode: None,
+                accent: true,
+                locked_color: None,
+            }
+        );
+    }
+
+    #[test]
+    fn command_line_options_override_the_settings_file() {
+        use sepiida_core::config::ModeSetting;
+
+        let config = Config {
+            source: SourceChoice::WallpaperEngine,
+            mode: ModeSetting::Light,
+            accent: false,
+            locked_color: Some(Color::new(1, 2, 3)),
+            ..Config::default()
+        };
+        let from_file = ApplyOptions::default().settings(&config);
+        assert_eq!(from_file.source, SourceChoice::WallpaperEngine);
+        assert_eq!(from_file.mode, Some(ThemeMode::Light));
+        assert!(!from_file.accent);
+        assert_eq!(from_file.locked_color, Some(Color::new(1, 2, 3)));
+
+        let options = ApplyOptions {
+            source: Some(SourceChoice::Windows),
+            mode: Some(ThemeMode::Dark),
+            dry_run: false,
+        };
+        let overridden = options.settings(&config);
+        assert_eq!(overridden.source, SourceChoice::Windows);
+        assert_eq!(overridden.mode, Some(ThemeMode::Dark));
     }
 
     #[test]
@@ -161,14 +235,14 @@ mod tests {
                 "windows"
             ]),
             Ok(ApplyOptions {
-                source: SourceChoice::Windows,
+                source: Some(SourceChoice::Windows),
                 mode: Some(ThemeMode::Dark),
                 dry_run: true,
             })
         );
         assert_eq!(
             apply(&["apply", "--source", "wallpaper-engine"]).map(|o| o.source),
-            Ok(SourceChoice::WallpaperEngine)
+            Ok(Some(SourceChoice::WallpaperEngine))
         );
     }
 

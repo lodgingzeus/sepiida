@@ -31,7 +31,23 @@ sepiida palette image.png        print the palette for an image
 `apply` writes the accent colour to the current user's registry settings and
 turns off "Automatically pick an accent colour from my background", which
 would otherwise overwrite it. Light/dark mode is left alone unless `--mode`
-is given.
+is given or the settings file asks for it.
+
+## Settings
+
+Settings live in `%APPDATA%\sepiida\config.toml`. Every field is optional:
+
+```toml
+source = "auto"          # auto, windows or wallpaper-engine
+mode = "unchanged"       # unchanged, light or dark
+accent = true            # write the Windows accent colour
+locked-color = "#3a6ea5" # use this colour instead of the wallpaper's
+```
+
+Command-line options override the file. If the file cannot be read,
+sepiida warns and uses the defaults without changing the file. Palettes are
+cached in `%LOCALAPPDATA%\sepiida\palettes.json`, so an image is analysed
+only once.
 
 ## Building
 

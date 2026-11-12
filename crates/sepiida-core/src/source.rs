@@ -6,6 +6,8 @@ use std::{
     str::FromStr,
 };
 
+use serde::{Deserialize, Serialize};
+
 use crate::Color;
 
 /// What a source is currently showing.
@@ -32,8 +34,10 @@ impl fmt::Display for SourceKind {
     }
 }
 
-/// The user's wallpaper source setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The user's wallpaper source setting. Serialized with the same names
+/// that `FromStr` accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SourceChoice {
     /// Wallpaper Engine when it is showing a wallpaper, otherwise Windows.
     #[default]
