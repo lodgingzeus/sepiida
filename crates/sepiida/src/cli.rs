@@ -7,6 +7,7 @@ usage:
   sepiida                          open the settings window
   sepiida palette <image>          print the palette for an image
   sepiida apply [options]          theme Windows from the current wallpaper
+  sepiida run                      stay in the background and re-theme when the wallpaper changes
   sepiida restore [--dry-run]      put back the accent colour you had before sepiida
 
 apply options:
@@ -24,6 +25,7 @@ pub enum Command {
     Palette { image: String },
     Apply(ApplyOptions),
     Restore { dry_run: bool },
+    Run,
 }
 
 /// What was given on the command line. `None` means "use the setting".
@@ -93,6 +95,7 @@ pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, CliError> {
         }),
         ["palette", ..] => Err(CliError::PaletteArguments),
         ["apply", options @ ..] => parse_apply(options).map(Command::Apply),
+        ["run"] => Ok(Command::Run),
         ["restore"] => Ok(Command::Restore { dry_run: false }),
         ["restore", "--dry-run"] => Ok(Command::Restore { dry_run: true }),
         ["restore", "--dry-run", "--dry-run", ..] => Err(CliError::Repeated("--dry-run")),
@@ -291,6 +294,15 @@ mod tests {
                 command: "apply",
                 option: "--verbose".to_owned()
             })
+        );
+    }
+
+    #[test]
+    fn run_takes_no_options() {
+        assert_eq!(parse(&["run"]), Ok(Command::Run));
+        assert_eq!(
+            parse(&["run", "--now"]),
+            Err(CliError::UnknownCommand("run".to_owned()))
         );
     }
 

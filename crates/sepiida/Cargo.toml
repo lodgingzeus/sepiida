@@ -11,11 +11,17 @@ repository.workspace = true
 sepiida-core.workspace = true
 anyhow.workspace = true
 directories.workspace = true
+notify.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 slint.workspace = true
 windows.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true

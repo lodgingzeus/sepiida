@@ -4,6 +4,7 @@ pub mod accent;
 pub mod cache;
 pub mod config;
 mod fsio;
+pub mod schedule;
 pub mod snapshot;
 pub mod source;
 pub mod wallpaper_engine;

@@ -1,10 +1,16 @@
 #[cfg(windows)]
+mod agent;
+#[cfg(windows)]
 mod apply;
 mod cli;
+#[cfg(any(windows, test))]
+mod logging;
 #[cfg(any(windows, test))]
 mod paths;
 #[cfg(windows)]
 mod restore;
+#[cfg(any(windows, test))]
+mod watch;
 #[cfg(windows)]
 mod win;
 
@@ -31,6 +37,7 @@ fn main() -> Result<()> {
         Command::Palette { image } => print_palette(&image),
         Command::Apply(options) => apply(options),
         Command::Restore { dry_run } => restore(dry_run),
+        Command::Run => run_agent(),
     }
 }
 
@@ -57,6 +64,16 @@ fn apply(_options: ApplyOptions) -> Result<()> {
 #[cfg(windows)]
 fn apply(options: ApplyOptions) -> Result<()> {
     apply::run_cli(options)
+}
+
+#[cfg(not(windows))]
+fn run_agent() -> Result<()> {
+    bail!("`sepiida run` only runs on Windows")
+}
+
+#[cfg(windows)]
+fn run_agent() -> Result<()> {
+    agent::run()
 }
 
 #[cfg(not(windows))]

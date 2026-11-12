@@ -14,7 +14,8 @@ By default sepiida follows Wallpaper Engine when it is running and showing a
 wallpaper, and the Windows wallpaper otherwise.
 
 > **Status: early development.** `sepiida apply` sets the Windows accent
-> colour from the current wallpaper; nothing runs in the background yet.
+> colour from the current wallpaper, and `sepiida run` keeps doing so in the
+> background. There is no tray icon yet.
 > Later versions load a DLL into Windows shell processes; until that is
 > stable, expect it to be able to crash or restart Explorer.
 
@@ -25,6 +26,7 @@ sepiida apply                    set the accent colour from the current wallpape
 sepiida apply --dry-run          show what would change without changing it
 sepiida apply --source windows   ignore Wallpaper Engine (or: wallpaper-engine, auto)
 sepiida apply --mode dark        also switch Windows to dark (or light) mode
+sepiida run                      stay running and re-theme whenever the wallpaper changes
 sepiida restore                  put back the accent colour you had before sepiida
 sepiida palette image.png        print the palette for an image
 ```
@@ -39,6 +41,10 @@ Before it first changes a registry value, `apply` saves the old value in
 values back (including "Automatically pick an accent colour") and deletes
 the file. If that file is damaged, `apply` stops rather than overwrite your
 original colours with sepiida's.
+
+`run` applies once at startup, then again a moment after the Windows
+wallpaper, the monitor layout or the settings file changes. Only one copy
+runs per user session. It logs to `%LOCALAPPDATA%\sepiida\logs\sepiida.log`.
 
 ## Settings
 
