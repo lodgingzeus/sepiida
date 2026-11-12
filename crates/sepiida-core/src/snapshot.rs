@@ -108,6 +108,10 @@ pub enum SnapshotError {
     Parse(#[source] serde_json::Error),
     #[error("could not write the saved original colours")]
     Write(#[source] io::Error),
+    /// Written by another sepiida version. Treated like damage: starting
+    /// over would replace the user's originals with sepiida's colours.
+    #[error("the saved original colours are from another sepiida version (format {0})")]
+    UnsupportedVersion(u32),
 }
 
 impl Snapshot {
@@ -121,6 +125,9 @@ impl Snapshot {
             Err(error) => return Err(SnapshotError::Read(error)),
         };
         let file: SnapshotFile = serde_json::from_slice(&bytes).map_err(SnapshotError::Parse)?;
+        if file.version != SNAPSHOT_VERSION {
+            return Err(SnapshotError::UnsupportedVersion(file.version));
+        }
         Ok(Self::from_file(file))
     }
 
@@ -194,9 +201,6 @@ impl Snapshot {
 
     fn from_file(file: SnapshotFile) -> Self {
         let mut snapshot = Self::default();
-        if file.version != SNAPSHOT_VERSION {
-            return snapshot;
-        }
         for entry in file.values {
             let Some(target) = find_target(&entry.key, &entry.name) else {
                 continue;

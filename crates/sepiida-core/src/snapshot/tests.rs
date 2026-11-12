@@ -160,17 +160,16 @@ fn bad_entries_in_the_file_become_unknown() {
 }
 
 #[test]
-fn damaged_files_are_errors_and_other_versions_are_ignored() {
+fn damaged_files_and_other_versions_are_errors() {
     assert!(matches!(load_text("{oops"), Err(SnapshotError::Parse(_))));
     assert!(matches!(
         load_text(r#"{"version":1,"values":[{"key":"k","name":"n","original":{"qword":1}}]}"#),
         Err(SnapshotError::Parse(_))
     ));
-    assert!(
-        load_text(r#"{"version":2,"values":[]}"#)
-            .expect("load")
-            .is_empty()
-    );
+    assert!(matches!(
+        load_text(r#"{"version":2,"values":[]}"#),
+        Err(SnapshotError::UnsupportedVersion(2))
+    ));
 }
 
 #[test]

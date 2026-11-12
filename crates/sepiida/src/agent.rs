@@ -34,14 +34,15 @@ const MAX_DELAY: Duration = Duration::from_secs(3);
 
 pub fn run() -> Result<()> {
     let paths = Paths::locate()?;
-    logging::init(&paths.log_dir)?;
+    // Before logging starts, so a second copy cannot rotate the log file
+    // the running agent writes to.
     let Some(_instance) =
         single_instance::acquire().context("could not check for another agent")?
     else {
-        info!("another agent is already running; exiting");
         println!("sepiida is already running");
         return Ok(());
     };
+    logging::init(&paths.log_dir)?;
     info!(version = env!("CARGO_PKG_VERSION"), "agent started");
 
     let (events, receiver) = mpsc::channel();

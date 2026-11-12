@@ -142,3 +142,24 @@ extern "system" fn window_proc(
     // SAFETY: forwards the message unchanged, as Windows expects.
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
+
+#[cfg(test)]
+mod tests {
+    use windows::Win32::UI::WindowsAndMessaging::{SPI_SETDESKPATTERN, WM_SYSCOLORCHANGE};
+
+    use super::*;
+
+    #[test]
+    fn only_wallpaper_and_display_changes_count() {
+        let wallpaper = WPARAM(SPI_SETDESKWALLPAPER.0 as usize);
+        assert!(is_wallpaper_change(WM_SETTINGCHANGE, wallpaper));
+        assert!(is_wallpaper_change(WM_DISPLAYCHANGE, WPARAM(0)));
+        // Our own "ImmersiveColorSet" broadcast must not re-trigger us.
+        assert!(!is_wallpaper_change(WM_SETTINGCHANGE, WPARAM(0)));
+        assert!(!is_wallpaper_change(
+            WM_SETTINGCHANGE,
+            WPARAM(SPI_SETDESKPATTERN.0 as usize)
+        ));
+        assert!(!is_wallpaper_change(WM_SYSCOLORCHANGE, wallpaper));
+    }
+}
