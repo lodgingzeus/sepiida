@@ -15,6 +15,10 @@ mod paths;
 #[cfg(windows)]
 mod restore;
 #[cfg(windows)]
+mod settings;
+#[cfg(any(windows, test))]
+mod settings_model;
+#[cfg(windows)]
 mod tray;
 #[cfg(any(windows, test))]
 mod tray_icon;
@@ -118,11 +122,13 @@ fn restore(dry_run: bool) -> Result<()> {
     restore::run_cli(dry_run)
 }
 
+/// The settings window on its own, without the tray. Changes reach a
+/// running agent through the settings file.
 #[cfg(windows)]
 fn run_settings() -> Result<()> {
-    use slint::ComponentHandle;
-
-    SettingsWindow::new()?.run()?;
+    let paths = paths::Paths::locate()?;
+    let _window = settings::open(&paths)?;
+    slint::run_event_loop()?;
     Ok(())
 }
 

@@ -70,7 +70,7 @@ pub fn prepare(settings: &ApplySettings, cache: &mut PaletteCache) -> Result<Pre
     if let Some(accent) = &accent {
         writes.extend(accent.registry_writes());
     }
-    if let Some(mode) = settings.mode {
+    if let Some(mode) = settings.mode.theme_mode(palette.lightness) {
         writes.extend(mode.registry_writes());
     }
     let pending = theme::pending(writes)?;

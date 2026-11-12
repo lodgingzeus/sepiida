@@ -25,15 +25,33 @@ pub enum ModeSetting {
     Unchanged,
     Light,
     Dark,
+    /// Dark mode for a dark wallpaper, light mode for a light one.
+    FollowWallpaper,
 }
 
+impl From<ThemeMode> for ModeSetting {
+    fn from(mode: ThemeMode) -> Self {
+        match mode {
+            ThemeMode::Light => Self::Light,
+            ThemeMode::Dark => Self::Dark,
+        }
+    }
+}
+
+/// Wallpapers with a mean L* below this get dark mode. Provisional: mid
+/// grey is about 50.
+const DARK_BELOW_LIGHTNESS: u8 = 50;
+
 impl ModeSetting {
-    /// The mode to write, or `None` to leave it as it is.
-    pub const fn theme_mode(self) -> Option<ThemeMode> {
+    /// The mode to write for a wallpaper of this lightness (see
+    /// `Palette::lightness`), or `None` to leave it as it is.
+    pub const fn theme_mode(self, lightness: u8) -> Option<ThemeMode> {
         match self {
             Self::Unchanged => None,
             Self::Light => Some(ThemeMode::Light),
             Self::Dark => Some(ThemeMode::Dark),
+            Self::FollowWallpaper if lightness < DARK_BELOW_LIGHTNESS => Some(ThemeMode::Dark),
+            Self::FollowWallpaper => Some(ThemeMode::Light),
         }
     }
 }
@@ -123,10 +141,22 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.source, SourceChoice::Auto);
         assert_eq!(config.mode, ModeSetting::Unchanged);
-        assert_eq!(config.mode.theme_mode(), None);
+        assert_eq!(config.mode.theme_mode(0), None);
         assert!(config.accent);
         assert!(!config.shell_styling && !config.glass);
         assert_eq!(config.locked_color, None);
+    }
+
+    #[test]
+    fn follow_wallpaper_picks_the_mode_from_lightness() {
+        let follow = ModeSetting::FollowWallpaper;
+        assert_eq!(follow.theme_mode(10), Some(ThemeMode::Dark));
+        assert_eq!(follow.theme_mode(49), Some(ThemeMode::Dark));
+        assert_eq!(follow.theme_mode(50), Some(ThemeMode::Light));
+        assert_eq!(ModeSetting::Dark.theme_mode(90), Some(ThemeMode::Dark));
+        assert_eq!(ModeSetting::Light.theme_mode(10), Some(ThemeMode::Light));
+        let config = Config::from_toml("mode = \"follow-wallpaper\"").expect("parse");
+        assert_eq!(config.mode, follow);
     }
 
     #[test]

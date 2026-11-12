@@ -59,9 +59,13 @@ runs per user session. It logs to `%LOCALAPPDATA%\sepiida\logs\sepiida.log`.
 
 Settings live in `%APPDATA%\sepiida\config.toml`. Every field is optional:
 
+The settings window (`sepiida` with no arguments, or Settings in the tray)
+edits this file and shows the current palette. It can also add sepiida to
+the programs that start when you sign in.
+
 ```toml
 source = "auto"          # auto, windows or wallpaper-engine
-mode = "unchanged"       # unchanged, light or dark
+mode = "unchanged"       # unchanged, light, dark or follow-wallpaper
 accent = true            # write the Windows accent colour
 locked-color = "#3a6ea5" # use this colour instead of the wallpaper's
 ```

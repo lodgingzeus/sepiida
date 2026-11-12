@@ -1,6 +1,11 @@
 //! Command-line parsing. Kept free of side effects so it can be tested.
 
-use sepiida_core::{Color, accent::ThemeMode, config::Config, source::SourceChoice};
+use sepiida_core::{
+    Color,
+    accent::ThemeMode,
+    config::{Config, ModeSetting},
+    source::SourceChoice,
+};
 
 pub const USAGE: &str = "\
 usage:
@@ -45,8 +50,8 @@ pub struct ApplyOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApplySettings {
     pub source: SourceChoice,
-    /// `None` leaves the user's light/dark setting alone.
-    pub mode: Option<ThemeMode>,
+    /// Resolved against the wallpaper's lightness once it is known.
+    pub mode: ModeSetting,
     pub accent: bool,
     pub locked_color: Option<Color>,
 }
@@ -59,7 +64,7 @@ impl ApplyOptions {
     pub fn settings(&self, config: &Config) -> ApplySettings {
         ApplySettings {
             source: self.source.unwrap_or(config.source),
-            mode: self.mode.or(config.mode.theme_mode()),
+            mode: self.mode.map_or(config.mode, ModeSetting::from),
             accent: config.accent,
             locked_color: config.locked_color,
         }
@@ -209,7 +214,7 @@ mod tests {
             settings,
             ApplySettings {
                 source: SourceChoice::Auto,
-                mode: None,
+                mode: ModeSetting::Unchanged,
                 accent: true,
                 locked_color: None,
             }
@@ -218,8 +223,6 @@ mod tests {
 
     #[test]
     fn command_line_options_override_the_settings_file() {
-        use sepiida_core::config::ModeSetting;
-
         let config = Config {
             source: SourceChoice::WallpaperEngine,
             mode: ModeSetting::Light,
@@ -229,7 +232,7 @@ mod tests {
         };
         let from_file = ApplyOptions::default().settings(&config);
         assert_eq!(from_file.source, SourceChoice::WallpaperEngine);
-        assert_eq!(from_file.mode, Some(ThemeMode::Light));
+        assert_eq!(from_file.mode, ModeSetting::Light);
         assert!(!from_file.accent);
         assert_eq!(from_file.locked_color, Some(Color::new(1, 2, 3)));
 
@@ -240,7 +243,7 @@ mod tests {
         };
         let overridden = options.settings(&config);
         assert_eq!(overridden.source, SourceChoice::Windows);
-        assert_eq!(overridden.mode, Some(ThemeMode::Dark));
+        assert_eq!(overridden.mode, ModeSetting::Dark);
     }
 
     #[test]

@@ -52,7 +52,7 @@ pub fn run() -> Result<()> {
 
     let (events, receiver) = mpsc::channel();
     // The tray must exist before the event loop starts, on this thread.
-    tray::start(events.clone())?;
+    tray::start(events.clone(), paths.clone())?;
     desktop_events::spawn(events.clone(), tray::recreate_tray)?;
 
     let worker_events = events.clone();

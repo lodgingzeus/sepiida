@@ -1,41 +1,124 @@
-import { VerticalBox, HorizontalBox, Switch } from "std-widgets.slint";
-
-export global Theme {
-    in-out property <color> accent: #c86fc9;
-    in-out property <color> surface: #1c1b1f;
-    in-out property <color> on-surface: #e6e1e5;
-}
+import { ComboBox, GroupBox, Switch, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
 component Swatch inherits Rectangle {
-    height: 48px;
+    in property <string> label;
+    height: 56px;
     border-radius: 8px;
-    animate background { duration: 400ms; easing: ease-in-out; }
+    border-width: 1px;
+    border-color: #80808060;
+    animate background { duration: 300ms; easing: ease-in-out; }
+
+    Text {
+        text: root.label;
+        x: 6px;
+        y: parent.height - self.height - 4px;
+        font-size: 11px;
+        color: #ffffff;
+        stroke: #00000080;
+        stroke-width: 1px;
+    }
 }
 
+// The settings window. Every control writes config.toml straight away; a
+// running agent picks the change up from there. The drop-down orders must
+// match `settings_model.rs`.
 export component SettingsWindow inherits Window {
-    title: "sepiida";
-    preferred-width: 420px;
-    preferred-height: 260px;
-    background: Theme.surface;
+    title: "sepiida settings";
+    preferred-width: 460px;
+    min-width: 360px;
 
-    in-out property <bool> glass-enabled: false;
+    // Palette preview, filled in from Rust once the wallpaper is read.
+    in property <color> preview-source: #808080;
+    in property <color> preview-accent: #808080;
+    in property <color> preview-light-surface: #f0f0f0;
+    in property <color> preview-dark-surface: #202020;
+    in property <string> preview-text: "Reading the wallpaper…";
+
+    in-out property <int> source-index;
+    in-out property <int> mode-index;
+    in-out property <bool> accent-enabled: true;
+    in-out property <bool> locked;
+    in property <string> locked-text;
+    in-out property <bool> start-with-windows;
+    in property <string> status;
+
+    callback source-changed(int);
+    callback mode-changed(int);
+    callback accent-toggled(bool);
+    callback lock-toggled(bool);
+    callback start-with-windows-toggled(bool);
 
     VerticalBox {
-        Text {
-            text: "sepiida";
-            font-size: 24px;
-            color: Theme.on-surface;
+        alignment: start;
+
+        GroupBox {
+            title: "Palette";
+            VerticalBox {
+                padding: 0;
+                HorizontalBox {
+                    padding: 0;
+                    Swatch { background: root.preview-source; label: "Wallpaper"; }
+                    Swatch { background: root.preview-accent; label: "Accent"; }
+                    Swatch { background: root.preview-light-surface; label: "Light"; }
+                    Swatch { background: root.preview-dark-surface; label: "Dark"; }
+                }
+                Text { text: root.preview-text; wrap: word-wrap; }
+            }
         }
-        HorizontalBox {
-            padding: 0;
-            Swatch { background: Theme.accent; }
-            Swatch { background: Theme.surface; border-width: 1px; border-color: Theme.on-surface; }
-            Swatch { background: Theme.on-surface; }
+
+        GroupBox {
+            title: "Wallpaper source";
+            ComboBox {
+                model: ["Automatic", "Windows wallpaper", "Wallpaper Engine"];
+                current-index <=> root.source-index;
+                selected => { root.source-changed(self.current-index); }
+            }
         }
+
+        GroupBox {
+            title: "Light and dark mode";
+            ComboBox {
+                model: ["Leave as it is", "Always light", "Always dark", "Follow the wallpaper"];
+                current-index <=> root.mode-index;
+                selected => { root.mode-changed(self.current-index); }
+            }
+        }
+
+        GroupBox {
+            title: "Colours";
+            VerticalBox {
+                padding: 0;
+                Switch {
+                    text: "Set the Windows accent colour";
+                    checked <=> root.accent-enabled;
+                    toggled => { root.accent-toggled(self.checked); }
+                }
+                Switch {
+                    text: root.locked ? "Palette locked to " + root.locked-text : "Lock the current palette";
+                    checked <=> root.locked;
+                    toggled => { root.lock-toggled(self.checked); }
+                }
+                Switch {
+                    text: "Restyle taskbar and Start (coming later)";
+                    enabled: false;
+                }
+                Switch {
+                    text: "Glass effect, experimental (coming later)";
+                    enabled: false;
+                }
+            }
+        }
+
         Switch {
-            text: "Glass effect (experimental)";
-            checked <=> root.glass-enabled;
+            text: "Start with Windows";
+            checked <=> root.start-with-windows;
+            toggled => { root.start-with-windows-toggled(self.checked); }
         }
-        Rectangle { }
+
+        Text {
+            text: root.status;
+            wrap: word-wrap;
+            visible: root.status != "";
+        }
     }
 }

@@ -121,6 +121,9 @@ impl From<&Scheme> for Tones {
 pub struct Palette {
     /// The dominant colour picked from the wallpaper.
     pub source: Color,
+    /// How light the wallpaper looks overall: mean CIE L*, 0 (black) to
+    /// 100 (white). For a solid colour, that colour's L*.
+    pub lightness: u8,
     pub light: Tones,
     pub dark: Tones,
 }
@@ -133,7 +136,8 @@ impl Palette {
             .pixels()
             .map(|p| Rgb::new(p[0], p[1], p[2]))
             .collect();
-        Self::from_source(extract_color(&pixels))
+        let lightness = mean_lightness(pixels.iter().map(|&p| Color::from(p)));
+        Self::from_parts(extract_color(&pixels).into(), lightness)
     }
 
     /// The format is detected from the file contents, not the extension:
@@ -145,7 +149,7 @@ impl Palette {
 
     /// For a solid-colour background, where there is no image to analyse.
     pub fn from_color(color: Color) -> Self {
-        Self::from_source(color.into())
+        Self::from_parts(color, lightness(color).round() as u8)
     }
 
     pub fn from_wallpaper(wallpaper: &source::Wallpaper) -> Result<Self, Error> {
@@ -155,14 +159,43 @@ impl Palette {
         }
     }
 
-    fn from_source(source: Rgb) -> Self {
-        let theme = ThemeBuilder::with_source(source).build();
+    /// Rebuilds a palette from what the cache stores.
+    pub fn from_parts(source: Color, lightness: u8) -> Self {
+        let theme = ThemeBuilder::with_source(source.into()).build();
         Self {
-            source: source.into(),
+            source,
+            lightness: lightness.min(100),
             light: (&theme.schemes.light).into(),
             dark: (&theme.schemes.dark).into(),
         }
     }
+}
+
+/// CIE L* of an sRGB colour, 0 to 100.
+fn lightness(c: Color) -> f32 {
+    let linear = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.040_45 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let y = 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b);
+    if y > 216.0 / 24_389.0 {
+        116.0 * y.cbrt() - 16.0
+    } else {
+        y * 24_389.0 / 27.0
+    }
+}
+
+fn mean_lightness(pixels: impl Iterator<Item = Color>) -> u8 {
+    let (sum, count) = pixels.fold((0.0f32, 0u32), |(sum, n), c| (sum + lightness(c), n + 1));
+    if count == 0 {
+        return 0;
+    }
+    // L* is within 0..=100, so the mean is too and the cast cannot wrap.
+    (sum / count as f32).round().clamp(0.0, 100.0) as u8
 }
 
 #[cfg(test)]
@@ -212,7 +245,23 @@ mod tests {
         // The palette cache stores only the source colour and rebuilds the
         // rest from it, which is only correct if this holds.
         let from_image = Palette::from_image(&solid(200, 111, 201));
-        assert_eq!(Palette::from_color(from_image.source), from_image);
+        assert_eq!(
+            Palette::from_parts(from_image.source, from_image.lightness),
+            from_image
+        );
+    }
+
+    #[test]
+    fn lightness_runs_from_black_to_white() {
+        assert_eq!(Palette::from_image(&solid(0, 0, 0)).lightness, 0);
+        assert_eq!(Palette::from_image(&solid(255, 255, 255)).lightness, 100);
+        let grey = Palette::from_image(&solid(119, 119, 119)).lightness;
+        assert!((49..=51).contains(&grey), "mid grey gave {grey}");
+        assert_eq!(
+            Palette::from_color(Color::new(255, 255, 255)).lightness,
+            100
+        );
+        assert_eq!(mean_lightness(std::iter::empty()), 0);
     }
 
     #[test]

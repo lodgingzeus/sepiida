@@ -10,7 +10,9 @@ use slint::{CloseRequestResponse, ComponentHandle, Image, Rgba8Pixel, SharedPixe
 use tracing::warn;
 
 use crate::{
-    SettingsWindow, Theme, Tray,
+    SettingsWindow, Tray,
+    paths::Paths,
+    settings,
     tray_icon::{ICON_SIZE, NEUTRAL, dot_pixels},
 };
 
@@ -21,6 +23,7 @@ thread_local! {
 struct Ui {
     tray: Tray,
     events: Sender<Event>,
+    paths: Paths,
     accent: Color,
     /// Created when opened and dropped when closed, so it costs nothing
     /// the rest of the time.
@@ -29,12 +32,13 @@ struct Ui {
 
 /// Shows the tray icon. Must be called on the event-loop thread before the
 /// loop starts.
-pub fn start(events: Sender<Event>) -> Result<()> {
+pub fn start(events: Sender<Event>, paths: Paths) -> Result<()> {
     let tray = build_tray(&events, false, NEUTRAL)?;
     UI.with_borrow_mut(|ui| {
         *ui = Some(Ui {
             tray,
             events,
+            paths,
             accent: NEUTRAL,
             settings: None,
         });
@@ -42,14 +46,14 @@ pub fn start(events: Sender<Event>) -> Result<()> {
     Ok(())
 }
 
-/// Recolours the tray icon (and an open settings window). Callable from
-/// any thread.
+/// Recolours the tray icon and refreshes an open settings window, after
+/// an apply. Callable from any thread.
 pub fn show_accent(accent: Color) {
     on_ui_thread(move |ui| {
         ui.accent = accent;
         ui.tray.set_accent_icon(dot_image(accent));
-        if let Some(settings) = &ui.settings {
-            settings.global::<Theme>().set_accent(to_slint(accent));
+        if let Some(window) = &ui.settings {
+            settings::reload_preview(window);
         }
     });
 }
@@ -118,16 +122,15 @@ fn open_settings() {
             }
             return;
         }
-        match create_settings(ui.accent) {
+        match create_settings(&ui.paths) {
             Ok(settings) => ui.settings = Some(settings),
             Err(error) => warn!("could not open the settings window: {error:#}"),
         }
     });
 }
 
-fn create_settings(accent: Color) -> Result<SettingsWindow> {
-    let settings = SettingsWindow::new()?;
-    settings.global::<Theme>().set_accent(to_slint(accent));
+fn create_settings(paths: &Paths) -> Result<SettingsWindow> {
+    let settings = settings::open(paths)?;
     settings.window().on_close_requested(|| {
         // Dropped on the next turn of the loop, not inside its own
         // callback.
@@ -140,7 +143,6 @@ fn create_settings(accent: Color) -> Result<SettingsWindow> {
         });
         CloseRequestResponse::HideWindow
     });
-    settings.show()?;
     Ok(settings)
 }
 
@@ -149,8 +151,4 @@ fn dot_image(color: Color) -> Image {
     Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
         &pixels, ICON_SIZE, ICON_SIZE,
     ))
-}
-
-fn to_slint(color: Color) -> slint::Color {
-    slint::Color::from_rgb_u8(color.r, color.g, color.b)
 }

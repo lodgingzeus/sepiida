@@ -1,8 +1,8 @@
 //! On-disk palette cache, keyed by wallpaper file, modification time and
 //! size.
 //!
-//! Only the source colour is stored: the rest of the palette is rebuilt
-//! from it, which is cheap. The file is sepiida's own, but it is still read
+//! Only the source colour and the lightness are stored: the rest of the
+//! palette is rebuilt from them, which is cheap. The file is sepiida's own, but it is still read
 //! defensively; anything wrong with it just means an empty cache.
 
 use std::{io, path::Path, time::UNIX_EPOCH};
@@ -17,7 +17,7 @@ const MAX_ENTRIES: usize = 256;
 const MAX_CACHE_BYTES: u64 = 1024 * 1024;
 /// Bumped whenever the colour extraction changes, so old results are
 /// dropped instead of reused.
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 
 /// Identifies one version of one wallpaper file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +59,7 @@ struct Entry {
     #[serde(flatten)]
     key: CacheKey,
     source: Color,
+    lightness: u8,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,16 +115,16 @@ impl PaletteCache {
         }
     }
 
-    pub fn get(&self, key: &CacheKey) -> Option<Color> {
+    pub fn get(&self, key: &CacheKey) -> Option<Palette> {
         self.entries
             .iter()
             .rev()
             .find(|entry| &entry.key == key)
-            .map(|entry| entry.source)
+            .map(|entry| Palette::from_parts(entry.source, entry.lightness))
     }
 
-    pub fn insert(&mut self, key: CacheKey, source: Color) {
-        if self.get(&key) == Some(source) {
+    pub fn insert(&mut self, key: CacheKey, palette: &Palette) {
+        if self.get(&key).as_ref() == Some(palette) {
             return;
         }
         // A file that changed keeps its path, so the stale entry goes too.
@@ -131,7 +132,11 @@ impl PaletteCache {
         if self.entries.len() >= MAX_ENTRIES {
             self.entries.remove(0);
         }
-        self.entries.push(Entry { key, source });
+        self.entries.push(Entry {
+            key,
+            source: palette.source,
+            lightness: palette.lightness,
+        });
         self.dirty = true;
     }
 
@@ -162,12 +167,12 @@ impl PaletteCache {
             return Palette::from_wallpaper(wallpaper);
         };
         let key = CacheKey::for_file(path);
-        if let Some(source) = key.as_ref().and_then(|key| self.get(key)) {
-            return Ok(Palette::from_color(source));
+        if let Some(palette) = key.as_ref().and_then(|key| self.get(key)) {
+            return Ok(palette);
         }
         let palette = Palette::from_path(path)?;
         if let Some(key) = key {
-            self.insert(key, palette.source);
+            self.insert(key, &palette);
         }
         Ok(palette)
     }
@@ -183,6 +188,10 @@ mod tests {
 
     const GREEN: Color = Color::new(40, 180, 60);
 
+    fn green() -> Palette {
+        Palette::from_color(GREEN)
+    }
+
     fn key(path: &str, secs: u64) -> CacheKey {
         CacheKey::new(path, UNIX_EPOCH + Duration::from_secs(secs), 10)
     }
@@ -196,10 +205,11 @@ mod tests {
     #[test]
     fn insert_replaces_stale_entries_for_the_same_file() {
         let mut cache = PaletteCache::default();
-        cache.insert(key("a.jpg", 1), GREEN);
-        cache.insert(key("a.jpg", 2), Color::new(1, 2, 3));
+        cache.insert(key("a.jpg", 1), &green());
+        let other = Palette::from_color(Color::new(1, 2, 3));
+        cache.insert(key("a.jpg", 2), &other);
         assert_eq!(cache.get(&key("a.jpg", 1)), None);
-        assert_eq!(cache.get(&key("a.jpg", 2)), Some(Color::new(1, 2, 3)));
+        assert_eq!(cache.get(&key("a.jpg", 2)), Some(other));
         assert_eq!(cache.entries.len(), 1);
     }
 
@@ -207,13 +217,13 @@ mod tests {
     fn oldest_entries_are_evicted_first() {
         let mut cache = PaletteCache::default();
         for i in 0..=MAX_ENTRIES {
-            cache.insert(key(&format!("{i}.jpg"), 1), GREEN);
+            cache.insert(key(&format!("{i}.jpg"), 1), &green());
         }
         assert_eq!(cache.entries.len(), MAX_ENTRIES);
         assert_eq!(cache.get(&key("0.jpg", 1)), None);
         assert_eq!(
             cache.get(&key(&format!("{MAX_ENTRIES}.jpg"), 1)),
-            Some(GREEN)
+            Some(green())
         );
     }
 
@@ -226,18 +236,18 @@ mod tests {
         cache.save(&path).expect("nothing to save");
         assert!(!path.exists());
 
-        cache.insert(key("a.jpg", 1), GREEN);
+        cache.insert(key("a.jpg", 1), &green());
         assert!(cache.is_dirty());
         cache.save(&path).expect("save");
         assert!(!cache.is_dirty());
-        cache.insert(key("a.jpg", 1), GREEN);
+        cache.insert(key("a.jpg", 1), &green());
         assert!(
             !cache.is_dirty(),
             "re-inserting the same result is no change"
         );
 
         let loaded = PaletteCache::load(&path).expect("load");
-        assert_eq!(loaded.get(&key("a.jpg", 1)), Some(GREEN));
+        assert_eq!(loaded.get(&key("a.jpg", 1)), Some(green()));
     }
 
     #[test]
@@ -250,7 +260,7 @@ mod tests {
         assert!(cache.entries.is_empty());
         assert!(matches!(error, Some(CacheError::Parse(_))));
 
-        std::fs::write(&path, br##"{"version":1,"entries":[{"path":"a","modified_secs":1,"modified_nanos":0,"len":1,"source":"green"}]}"##).expect("write");
+        std::fs::write(&path, br##"{"version":2,"entries":[{"path":"a","modified_secs":1,"modified_nanos":0,"len":1,"source":"green","lightness":5}]}"##).expect("write");
         assert!(matches!(
             PaletteCache::load(&path),
             Err(CacheError::Parse(_))
