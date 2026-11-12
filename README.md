@@ -13,9 +13,25 @@ It works with two wallpaper sources:
 By default sepiida follows Wallpaper Engine when it is running and showing a
 wallpaper, and the Windows wallpaper otherwise.
 
-> **Status: early development.** Only palette extraction works today. Later
-> versions load a DLL into Windows shell processes; until that is stable,
-> expect it to be able to crash or restart Explorer.
+> **Status: early development.** `sepiida apply` sets the Windows accent
+> colour from the current wallpaper; nothing runs in the background yet.
+> Later versions load a DLL into Windows shell processes; until that is
+> stable, expect it to be able to crash or restart Explorer.
+
+## Usage
+
+```
+sepiida apply                    set the accent colour from the current wallpaper
+sepiida apply --dry-run          show what would change without changing it
+sepiida apply --source windows   ignore Wallpaper Engine (or: wallpaper-engine, auto)
+sepiida apply --mode dark        also switch Windows to dark (or light) mode
+sepiida palette image.png        print the palette for an image
+```
+
+`apply` writes the accent colour to the current user's registry settings and
+turns off "Automatically pick an accent colour from my background", which
+would otherwise overwrite it. Light/dark mode is left alone unless `--mode`
+is given.
 
 ## Building
 

@@ -4,26 +4,16 @@ use anyhow::{Context, Result};
 use sepiida_core::{
     Palette,
     accent::AccentValues,
-    source::{SourceError, Wallpaper, WallpaperSource, resolve},
+    source::{Wallpaper, resolve},
 };
 
 use crate::{
     cli::ApplyOptions,
-    win::{desktop::WindowsWallpaper, theme},
+    win::{desktop::WindowsWallpaper, theme, wallpaper_engine::WallpaperEngine},
 };
 
-/// Placeholder until the Wallpaper Engine source lands: it never shows a
-/// wallpaper, so Auto always uses the Windows wallpaper.
-struct NoWallpaperEngine;
-
-impl WallpaperSource for NoWallpaperEngine {
-    fn current(&self) -> Result<Option<Wallpaper>, SourceError> {
-        Ok(None)
-    }
-}
-
 pub fn run(options: ApplyOptions) -> Result<()> {
-    let resolved = resolve(options.source, &WindowsWallpaper, &NoWallpaperEngine)?;
+    let resolved = resolve(options.source, &WindowsWallpaper, &WallpaperEngine)?;
     if let Some(error) = &resolved.wallpaper_engine_error {
         eprintln!(
             "warning: Wallpaper Engine could not be read, using the Windows wallpaper: {error}"

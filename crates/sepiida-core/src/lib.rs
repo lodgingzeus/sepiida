@@ -2,6 +2,7 @@
 
 pub mod accent;
 pub mod source;
+pub mod wallpaper_engine;
 
 use std::{fmt, path::Path};
 

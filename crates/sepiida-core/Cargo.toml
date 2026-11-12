@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 image.workspace = true
 material-colors.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

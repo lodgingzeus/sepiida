@@ -4,3 +4,4 @@
 pub mod desktop;
 pub mod registry;
 pub mod theme;
+pub mod wallpaper_engine;
