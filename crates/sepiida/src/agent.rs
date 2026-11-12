@@ -7,12 +7,14 @@
 
 use std::{
     path::PathBuf,
-    sync::mpsc::{self, RecvTimeoutError, Sender},
+    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    thread,
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
 use sepiida_core::{
+    Color,
     cache::PaletteCache,
     config::Config,
     schedule::{Event, Flow, Scheduler},
@@ -25,6 +27,7 @@ use crate::{
     engine_watch::EngineWatch,
     logging,
     paths::Paths,
+    tray,
     watch::{FileWatcher, MissingFolder},
     win::{desktop_events, single_instance},
 };
@@ -48,12 +51,41 @@ pub fn run() -> Result<()> {
     info!(version = env!("CARGO_PKG_VERSION"), "agent started");
 
     let (events, receiver) = mpsc::channel();
+    // The tray must exist before the event loop starts, on this thread.
+    tray::start(events.clone())?;
+    desktop_events::spawn(events.clone(), tray::recreate_tray)?;
+
+    let worker_events = events.clone();
+    let worker = thread::Builder::new()
+        .name("agent".to_owned())
+        .spawn(move || {
+            if let Err(error) = agent_loop(paths, &receiver, worker_events) {
+                error!("agent stopped: {error:#}");
+            }
+            // However the loop ended, take the tray down with it.
+            let _ = slint::quit_event_loop();
+        })
+        .context("could not start the agent thread")?;
+
+    // The tray keeps the loop alive; it returns after "Quit".
+    let ui_result = slint::run_event_loop_until_quit();
+    let _ = events.send(Event::Quit);
+    if worker.join().is_err() {
+        error!("the agent thread panicked");
+    }
+    info!("agent stopped");
+    ui_result.context("the tray icon stopped")?;
+    Ok(())
+}
+
+/// The debounce loop. Runs on its own thread until it receives `Quit`.
+fn agent_loop(paths: Paths, receiver: &Receiver<Event>, events: Sender<Event>) -> Result<()> {
     let _settings_watcher = watch_files(vec![paths.config.clone()], events.clone())?;
-    desktop_events::spawn(events.clone())?;
     let mut engine = EngineWatch::start(paths.agent_state.clone(), events.clone());
-    // Theme from the current wallpaper straight away. The channel was just
-    // created and `receiver` is alive, so the send cannot fail.
+    // Theme from the current wallpaper straight away. `receiver` is alive,
+    // so the send cannot fail.
     let _ = events.send(Event::ApplyNow);
+    drop(events);
 
     let mut agent = Agent { paths, cache: None };
     let mut scheduler = Scheduler::new(SETTLE, MAX_DELAY);
@@ -65,20 +97,20 @@ pub fn run() -> Result<()> {
         match event {
             Ok(event) => {
                 if scheduler.handle(event, Instant::now()) == Flow::Quit {
-                    break;
+                    return Ok(());
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
-            // Unreachable while `events` is alive; quit rather than spin.
-            Err(RecvTimeoutError::Disconnected) => break,
+            // Every sender is gone: nothing can wake the loop again.
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
         }
         if scheduler.take_due(Instant::now()) {
-            agent.apply_once();
+            if let Some(accent) = agent.apply_once() {
+                tray::show_accent(accent);
+            }
             engine.refresh();
         }
     }
-    info!("agent stopped");
-    Ok(())
 }
 
 fn watch_files(files: Vec<PathBuf>, events: Sender<Event>) -> Result<FileWatcher> {
@@ -96,13 +128,18 @@ struct Agent {
 impl Agent {
     /// Never fails: every problem is logged and the agent carries on, so a
     /// bad wallpaper or a locked registry key does not stop later applies.
-    fn apply_once(&mut self) {
-        if let Err(error) = self.try_apply() {
-            error!("apply failed: {error:#}");
+    /// Returns the accent colour now in effect, if there is one.
+    fn apply_once(&mut self) -> Option<Color> {
+        match self.try_apply() {
+            Ok(accent) => accent,
+            Err(error) => {
+                error!("apply failed: {error:#}");
+                None
+            }
         }
     }
 
-    fn try_apply(&mut self) -> Result<()> {
+    fn try_apply(&mut self) -> Result<Option<Color>> {
         // Re-read every time: the file is tiny and this picks up edits
         // without a separate reload path.
         let (config, config_error) = Config::load_or_default(&self.paths.config);
@@ -134,9 +171,10 @@ impl Agent {
             Origin::Locked => "locked colour".to_owned(),
             Origin::Wallpaper(resolved) => resolved.kind.to_string(),
         };
+        let accent = prepared.accent.map(|accent| accent.accent());
         if prepared.pending.is_empty() {
             info!(%origin, source = %prepared.palette.source, "nothing to change");
-            return Ok(());
+            return Ok(accent);
         }
         apply::commit(&prepared, &self.paths.saved_theme)?;
         info!(
@@ -145,6 +183,6 @@ impl Agent {
             values = prepared.pending.len(),
             "applied"
         );
-        Ok(())
+        Ok(accent)
     }
 }

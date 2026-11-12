@@ -7,7 +7,7 @@ usage:
   sepiida                          open the settings window
   sepiida palette <image>          print the palette for an image
   sepiida apply [options]          theme Windows from the current wallpaper
-  sepiida run                      stay in the background and re-theme when the wallpaper changes
+  sepiida run                      stay in the background (tray icon) and re-theme when the wallpaper changes
   sepiida restore [--dry-run]      put back the accent colour you had before sepiida
 
 apply options:

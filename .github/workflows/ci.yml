@@ -29,4 +29,5 @@ jobs:
           if-no-files-found: error
           path: |
             target/release/sepiida.exe
+            target/release/sepiidaw.exe
             target/release/sepiida_hook.dll

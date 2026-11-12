@@ -24,7 +24,7 @@ material-colors = { version = "0.5", features = ["quantize"] }
 palette = "0.7"
 notify = "8"
 directories = "6"
-slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "system-tray"] }
 slint-build = "1.18"
 windows = { version = "0.62", features = [
     "Win32_Foundation",

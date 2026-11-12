@@ -1,5 +1,6 @@
 //! Listens for the window messages Windows broadcasts when the desktop
-//! wallpaper or the monitor layout changes.
+//! wallpaper or the monitor layout changes, and when Explorer restarts
+//! (`TaskbarCreated`, after which tray icons must be added again).
 //!
 //! Broadcasts only reach top-level windows (message-only windows do not get
 //! them), so this creates an invisible top-level window on its own thread.
@@ -17,17 +18,25 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG, RegisterClassExW,
-            SPI_SETDESKWALLPAPER, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DISPLAYCHANGE,
-            WM_SETTINGCHANGE, WNDCLASSEXW,
+            RegisterWindowMessageW, SPI_SETDESKWALLPAPER, WINDOW_EX_STYLE, WINDOW_STYLE,
+            WM_DISPLAYCHANGE, WM_SETTINGCHANGE, WNDCLASSEXW,
         },
     },
     core::w,
 };
 
+/// What the window procedure needs. Set once, on the window's own thread,
+/// before the window exists.
+struct Listener {
+    sender: Sender<Event>,
+    on_taskbar_created: Box<dyn Fn()>,
+    /// The id Windows assigned to the `TaskbarCreated` message; 0 if it
+    /// could not be registered, which matches no message.
+    taskbar_created: u32,
+}
+
 thread_local! {
-    /// Where the window procedure sends events. Set once, on the window's
-    /// own thread, before the window exists.
-    static SENDER: OnceCell<Sender<Event>> = const { OnceCell::new() };
+    static LISTENER: OnceCell<Listener> = const { OnceCell::new() };
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -40,16 +49,28 @@ pub enum DesktopEventsError {
     Startup,
 }
 
-/// Starts the listener. Returns once the window exists, so no change after
-/// this call is missed. The thread runs until the process exits.
-pub fn spawn(sender: Sender<Event>) -> Result<(), DesktopEventsError> {
+/// Starts the listener. Wallpaper changes go to `sender`;
+/// `on_taskbar_created` runs on the listener thread after an Explorer
+/// restart. Returns once the window exists, so no change after this call
+/// is missed. The thread runs until the process exits.
+pub fn spawn(
+    sender: Sender<Event>,
+    on_taskbar_created: impl Fn() + Send + 'static,
+) -> Result<(), DesktopEventsError> {
     let (ready_tx, ready_rx) = mpsc::channel();
     thread::Builder::new()
         .name("desktop-events".to_owned())
         .spawn(move || {
-            SENDER.with(|cell| {
+            // SAFETY: a static, null-terminated literal. Every program that
+            // registers this name gets the same id.
+            let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
+            LISTENER.with(|cell| {
                 // The cell is new on this thread, so it cannot be set yet.
-                let _ = cell.set(sender);
+                let _ = cell.set(Listener {
+                    sender,
+                    on_taskbar_created: Box::new(on_taskbar_created),
+                    taskbar_created,
+                });
             });
             let created = create_window();
             let ok = created.is_ok();
@@ -131,14 +152,15 @@ extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if is_wallpaper_change(message, wparam) {
-        SENDER.with(|cell| {
-            if let Some(sender) = cell.get() {
-                // The receiver only goes away when the agent is quitting.
-                let _ = sender.send(Event::Changed);
-            }
-        });
-    }
+    LISTENER.with(|cell| {
+        let Some(listener) = cell.get() else { return };
+        if is_wallpaper_change(message, wparam) {
+            // The receiver only goes away when the agent is quitting.
+            let _ = listener.sender.send(Event::Changed);
+        } else if listener.taskbar_created != 0 && message == listener.taskbar_created {
+            (listener.on_taskbar_created)();
+        }
+    });
     // SAFETY: forwards the message unchanged, as Windows expects.
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }

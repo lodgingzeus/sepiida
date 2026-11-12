@@ -1,0 +1,36 @@
+// The notification-area icon of the background agent. The icon picture is
+// set from Rust (a dot in the current accent colour).
+export component Tray inherits SystemTrayIcon {
+    in property <bool> paused: false;
+    // Built-in properties get no Rust setter, so the picture comes in here.
+    in property <image> accent-icon;
+    icon: root.accent-icon;
+    tooltip: root.paused ? "sepiida (paused)" : "sepiida";
+
+    callback apply-now();
+    callback toggle-pause();
+    callback open-settings();
+    callback quit();
+
+    clicked => { root.open-settings(); }
+
+    Menu {
+        MenuItem {
+            title: "Apply now";
+            activated => { root.apply-now(); }
+        }
+        MenuItem {
+            title: root.paused ? "Resume" : "Pause";
+            activated => { root.toggle-pause(); }
+        }
+        MenuSeparator { }
+        MenuItem {
+            title: "Settings…";
+            activated => { root.open-settings(); }
+        }
+        MenuItem {
+            title: "Quit";
+            activated => { root.quit(); }
+        }
+    }
+}

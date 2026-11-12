@@ -3,6 +3,7 @@
 
 pub mod desktop;
 pub mod desktop_events;
+pub mod message_box;
 pub mod registry;
 pub mod single_instance;
 pub mod theme;

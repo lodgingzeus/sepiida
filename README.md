@@ -14,8 +14,8 @@ By default sepiida follows Wallpaper Engine when it is running and showing a
 wallpaper, and the Windows wallpaper otherwise.
 
 > **Status: early development.** `sepiida apply` sets the Windows accent
-> colour from the current wallpaper, and `sepiida run` keeps doing so in the
-> background. There is no tray icon yet.
+> colour from the current wallpaper, and `sepiidaw.exe` keeps doing so in
+> the background with a tray icon.
 > Later versions load a DLL into Windows shell processes; until that is
 > stable, expect it to be able to crash or restart Explorer.
 
@@ -42,7 +42,12 @@ values back (including "Automatically pick an accent colour") and deletes
 the file. If that file is damaged, `apply` stops rather than overwrite your
 original colours with sepiida's.
 
-`run` applies once at startup, then again a moment after the Windows
+`sepiidaw.exe` is the same program without a console window: started
+with no arguments it runs in the background with a tray icon (a dot in the
+current accent colour) offering Apply now, Pause/Resume, Settings and Quit.
+`sepiida run` does the same from a terminal.
+
+The background agent applies once at startup, then again a moment after the Windows
 wallpaper, the monitor layout, the settings file or the Wallpaper Engine
 wallpaper changes. Once it has seen Wallpaper Engine running, it remembers
 where it is installed, watches its `config.json` and notices when it exits.
