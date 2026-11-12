@@ -1,0 +1,5 @@
+# Link the C runtime statically so the Windows binaries run on a machine
+# without the Visual C++ Redistributable (vcruntime140.dll). The hook DLL
+# also must not depend on a runtime DLL inside Explorer.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
