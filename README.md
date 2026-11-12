@@ -43,7 +43,11 @@ the file. If that file is damaged, `apply` stops rather than overwrite your
 original colours with sepiida's.
 
 `run` applies once at startup, then again a moment after the Windows
-wallpaper, the monitor layout or the settings file changes. Only one copy
+wallpaper, the monitor layout, the settings file or the Wallpaper Engine
+wallpaper changes. Once it has seen Wallpaper Engine running, it remembers
+where it is installed, watches its `config.json` and notices when it exits.
+It does not poll for Wallpaper Engine starting; until then, any other
+change (or `sepiida apply`) picks it up. Only one copy
 runs per user session. It logs to `%LOCALAPPDATA%\sepiida\logs\sepiida.log`.
 
 ## Settings

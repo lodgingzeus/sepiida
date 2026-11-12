@@ -1,5 +1,6 @@
 //! `sepiida run`: the background agent. Applies once at startup, then again
-//! whenever the wallpaper or the settings change.
+//! whenever the wallpaper (Windows or Wallpaper Engine) or the settings
+//! change.
 //!
 //! Event-driven only: the main thread sleeps on a channel and wakes for a
 //! notification or for the end of a debounce wait, never on a timer.
@@ -21,9 +22,10 @@ use tracing::{error, info, warn};
 use crate::{
     apply::{self, Origin},
     cli::ApplyOptions,
+    engine_watch::EngineWatch,
     logging,
     paths::Paths,
-    watch::FileWatcher,
+    watch::{FileWatcher, MissingFolder},
     win::{desktop_events, single_instance},
 };
 
@@ -48,6 +50,7 @@ pub fn run() -> Result<()> {
     let (events, receiver) = mpsc::channel();
     let _settings_watcher = watch_files(vec![paths.config.clone()], events.clone())?;
     desktop_events::spawn(events.clone())?;
+    let mut engine = EngineWatch::start(paths.agent_state.clone(), events.clone());
     // Theme from the current wallpaper straight away. The channel was just
     // created and `receiver` is alive, so the send cannot fail.
     let _ = events.send(Event::ApplyNow);
@@ -71,6 +74,7 @@ pub fn run() -> Result<()> {
         }
         if scheduler.take_due(Instant::now()) {
             agent.apply_once();
+            engine.refresh();
         }
     }
     info!("agent stopped");
@@ -78,7 +82,7 @@ pub fn run() -> Result<()> {
 }
 
 fn watch_files(files: Vec<PathBuf>, events: Sender<Event>) -> Result<FileWatcher> {
-    Ok(FileWatcher::new(files, move || {
+    Ok(FileWatcher::new(files, MissingFolder::Create, move || {
         let _ = events.send(Event::Changed);
     })?)
 }

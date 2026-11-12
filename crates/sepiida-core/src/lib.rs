@@ -3,6 +3,7 @@
 pub mod accent;
 pub mod cache;
 pub mod config;
+pub mod engine_tracker;
 mod fsio;
 pub mod schedule;
 pub mod snapshot;

@@ -3,6 +3,8 @@ mod agent;
 #[cfg(windows)]
 mod apply;
 mod cli;
+#[cfg(windows)]
+mod engine_watch;
 #[cfg(any(windows, test))]
 mod logging;
 #[cfg(any(windows, test))]

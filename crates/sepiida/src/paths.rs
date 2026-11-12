@@ -15,6 +15,9 @@ pub struct Paths {
     pub palette_cache: PathBuf,
     /// The accent values sepiida replaced, for `sepiida restore`.
     pub saved_theme: PathBuf,
+    /// Facts the agent remembers between runs, such as where Wallpaper
+    /// Engine is installed.
+    pub agent_state: PathBuf,
     pub log_dir: PathBuf,
 }
 
@@ -35,6 +38,7 @@ impl Paths {
             config: roaming.join("config.toml"),
             palette_cache: local.join("palettes.json"),
             saved_theme: local.join("saved-theme.json"),
+            agent_state: local.join("agent-state.json"),
             log_dir: local.join("logs"),
         }
     }

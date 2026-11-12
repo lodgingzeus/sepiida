@@ -15,6 +15,7 @@ use std::{
 };
 
 use sepiida_core::{
+    engine_tracker::Observed,
     source::{SourceError, Wallpaper, WallpaperSource},
     wallpaper_engine::{parse_get_wallpaper_output, project_wallpaper},
 };
@@ -27,8 +28,8 @@ use windows::{
                 TH32CS_SNAPPROCESS,
             },
             Threading::{
-                OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-                QueryFullProcessImageNameW,
+                INFINITE, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+                PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, WaitForSingleObject,
             },
         },
     },
@@ -62,7 +63,7 @@ pub struct WallpaperEngine;
 
 impl WallpaperSource for WallpaperEngine {
     fn current(&self) -> Result<Option<Wallpaper>, SourceError> {
-        let Some(executable) = running_executable()? else {
+        let Some((_, executable)) = running_executable()? else {
             return Ok(None);
         };
         let output = get_wallpaper(&executable)?;
@@ -77,9 +78,48 @@ impl WallpaperSource for WallpaperEngine {
     }
 }
 
-/// Full path of the running Wallpaper Engine, or `None` when it is not
-/// running. The path of the live process is used, never a search of `PATH`.
-fn running_executable() -> Result<Option<PathBuf>, EngineError> {
+/// The running Wallpaper Engine's process and install folder, or `None`
+/// when it is not running.
+pub fn running() -> Result<Option<Observed>, SourceError> {
+    Ok(running_executable()?.and_then(|(process_id, executable)| {
+        Some(Observed {
+            process_id,
+            folder: executable.parent()?.to_owned(),
+        })
+    }))
+}
+
+/// Calls `on_exit` from a background thread once the process has exited,
+/// or straight away if it is already gone. The thread only waits on the
+/// process handle; it never polls.
+pub fn wait_for_exit(process_id: u32, on_exit: impl FnOnce() + Send + 'static) {
+    // SAFETY: no pointers are passed; the handle is owned by the guard.
+    // SYNCHRONIZE is the only right needed to wait.
+    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, process_id) }.map(OwnedHandle);
+    let Ok(process) = process else {
+        on_exit();
+        return;
+    };
+    let spawned = thread::Builder::new()
+        .name("wallpaper-engine-exit".to_owned())
+        .spawn(move || {
+            // Move the whole guard in, not just the handle field, so the
+            // handle is closed on this thread after the wait.
+            let process = process;
+            // SAFETY: the handle is valid until `process` drops after the
+            // wait returns.
+            unsafe { WaitForSingleObject(process.0, INFINITE) };
+            on_exit();
+        });
+    // Without the thread the exit goes unnoticed until the next apply;
+    // nothing else depends on it.
+    drop(spawned);
+}
+
+/// Process id and full path of the running Wallpaper Engine, or `None` when
+/// it is not running. The path of the live process is used, never a search
+/// of `PATH`.
+fn running_executable() -> Result<Option<(u32, PathBuf)>, EngineError> {
     // SAFETY: no pointers are passed; the handle is owned by the guard.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
         .map(OwnedHandle)
@@ -95,7 +135,7 @@ fn running_executable() -> Result<Option<PathBuf>, EngineError> {
         if is_wallpaper_engine(&entry.szExeFile)
             && let Some(path) = image_path(entry.th32ProcessID)
         {
-            return Ok(Some(path));
+            return Ok(Some((entry.th32ProcessID, path)));
         }
         // SAFETY: as above.
         more = unsafe { Process32NextW(snapshot.0, &mut entry) }.is_ok();
@@ -175,6 +215,10 @@ fn read_with_timeout(child: &mut Child) -> Option<Vec<u8>> {
 }
 
 struct OwnedHandle(HANDLE);
+
+// SAFETY: a kernel object handle is valid in every thread of the process,
+// and the guard closes it exactly once, from whichever thread drops it.
+unsafe impl Send for OwnedHandle {}
 
 impl Drop for OwnedHandle {
     fn drop(&mut self) {

@@ -22,6 +22,15 @@ pub enum WatchError {
     Watch(String, #[source] notify::Error),
 }
 
+/// What to do when a watched file's folder does not exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingFolder {
+    /// Create it; for sepiida's own folders.
+    Create,
+    /// Fail; for folders that belong to another program.
+    Fail,
+}
+
 /// Stops watching when dropped.
 pub struct FileWatcher {
     _watcher: RecommendedWatcher,
@@ -29,10 +38,10 @@ pub struct FileWatcher {
 
 impl FileWatcher {
     /// Calls `on_change` from a background thread whenever one of `files`
-    /// is created, written, removed or renamed. Missing parent folders are
-    /// created.
+    /// is created, written, removed or renamed.
     pub fn new(
         files: Vec<PathBuf>,
+        missing: MissingFolder,
         on_change: impl Fn() + Send + 'static,
     ) -> Result<Self, WatchError> {
         let watched = files.clone();
@@ -61,8 +70,10 @@ impl FileWatcher {
             }
         }
         for dir in dirs {
-            fs::create_dir_all(dir)
-                .map_err(|e| WatchError::CreateDir(dir.display().to_string(), e))?;
+            if missing == MissingFolder::Create {
+                fs::create_dir_all(dir)
+                    .map_err(|e| WatchError::CreateDir(dir.display().to_string(), e))?;
+            }
             watcher
                 .watch(dir, RecursiveMode::NonRecursive)
                 .map_err(|e| WatchError::Watch(dir.display().to_string(), e))?;
@@ -112,7 +123,7 @@ mod tests {
         let folder = dir.path().join("created-by-watcher");
         let file = folder.join("config.toml");
         let (tx, rx) = mpsc::channel();
-        let _watcher = FileWatcher::new(vec![file.clone()], move || {
+        let _watcher = FileWatcher::new(vec![file.clone()], MissingFolder::Create, move || {
             let _ = tx.send(());
         })
         .expect("watch");
@@ -132,8 +143,21 @@ mod tests {
     #[test]
     fn rejects_a_bare_file_name() {
         assert!(matches!(
-            FileWatcher::new(vec![PathBuf::from("config.toml")], || {}),
+            FileWatcher::new(
+                vec![PathBuf::from("config.toml")],
+                MissingFolder::Create,
+                || {}
+            ),
             Err(WatchError::NoParent(_))
         ));
+    }
+
+    #[test]
+    fn never_creates_folders_it_was_told_to_leave_alone() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let folder = dir.path().join("not-ours");
+        let result = FileWatcher::new(vec![folder.join("config.json")], MissingFolder::Fail, || {});
+        assert!(matches!(result, Err(WatchError::Watch(..))));
+        assert!(!folder.exists());
     }
 }
