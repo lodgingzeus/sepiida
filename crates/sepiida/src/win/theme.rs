@@ -1,7 +1,7 @@
 //! Native theming: write the accent colour and light/dark mode, then tell
 //! running programs to pick the change up.
 
-use sepiida_core::accent::RegistryWrite;
+use sepiida_core::{accent::RegistryWrite, snapshot::RestoreAction};
 use windows::{
     Win32::{
         Foundation::{LPARAM, WPARAM},
@@ -41,6 +41,26 @@ pub fn apply(writes: &[RegistryWrite]) -> Result<(), RegistryError> {
     let result = writes.iter().try_for_each(registry::set);
     broadcast_color_change();
     result
+}
+
+/// Puts saved values back and broadcasts the change once. Every action is
+/// attempted even if one fails; the first error is returned.
+pub fn restore(actions: &[RestoreAction]) -> Result<(), RegistryError> {
+    if actions.is_empty() {
+        return Ok(());
+    }
+    let mut first_error = None;
+    for action in actions {
+        let result = match action {
+            RestoreAction::Set(write) => registry::set(write),
+            RestoreAction::Delete { key, name } => registry::delete(key, name),
+        };
+        if let Err(error) = result {
+            first_error.get_or_insert(error);
+        }
+    }
+    broadcast_color_change();
+    first_error.map_or(Ok(()), Err)
 }
 
 fn broadcast_color_change() {

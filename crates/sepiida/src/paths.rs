@@ -13,6 +13,8 @@ const APP_DIR: &str = "sepiida";
 pub struct Paths {
     pub config: PathBuf,
     pub palette_cache: PathBuf,
+    /// The accent values sepiida replaced, for `sepiida restore`.
+    pub saved_theme: PathBuf,
     pub log_dir: PathBuf,
 }
 
@@ -32,6 +34,7 @@ impl Paths {
         Self {
             config: roaming.join("config.toml"),
             palette_cache: local.join("palettes.json"),
+            saved_theme: local.join("saved-theme.json"),
             log_dir: local.join("logs"),
         }
     }
@@ -48,6 +51,10 @@ mod tests {
         assert_eq!(
             paths.palette_cache,
             Path::new("local/sepiida/palettes.json")
+        );
+        assert_eq!(
+            paths.saved_theme,
+            Path::new("local/sepiida/saved-theme.json")
         );
         assert_eq!(paths.log_dir, Path::new("local/sepiida/logs"));
     }

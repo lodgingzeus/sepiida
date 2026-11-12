@@ -2,13 +2,16 @@
 
 use std::ffi::c_void;
 
-use sepiida_core::accent::{RegistryData, RegistryWrite};
+use sepiida_core::{
+    accent::{RegistryData, RegistryWrite},
+    snapshot::Original,
+};
 use windows::{
     Win32::{
         Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_UNSUPPORTED_TYPE, WIN32_ERROR},
         System::Registry::{
             HKEY_CURRENT_USER, REG_BINARY, REG_DWORD, REG_ROUTINE_FLAGS, REG_VALUE_TYPE,
-            RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RegGetValueW, RegSetKeyValueW,
+            RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
         },
     },
     core::HSTRING,
@@ -28,23 +31,42 @@ pub struct RegistryError {
     source: windows::core::Error,
 }
 
+/// What a lookup of one value found.
+enum Lookup {
+    /// The value exists with the expected type; this many bytes were read.
+    Found(usize),
+    Missing,
+    /// The value exists but has another type or does not fit the buffer.
+    Unreadable,
+}
+
 /// Returns `None` when the value is missing, has another type, or does not
 /// fit: in each case it is not the value we would write.
 pub fn read(write: &RegistryWrite) -> Result<Option<RegistryData>, RegistryError> {
+    match read_original(write)? {
+        Original::Value(data) => Ok(Some(data)),
+        Original::Absent | Original::Unknown => Ok(None),
+    }
+}
+
+/// Reads the current value in the form needed to put it back later.
+pub fn read_original(write: &RegistryWrite) -> Result<Original, RegistryError> {
     let (flags, capacity) = match &write.data {
         RegistryData::Dword(_) => (RRF_RT_REG_DWORD, size_of::<u32>()),
         RegistryData::Binary(_) => (RRF_RT_REG_BINARY, MAX_BINARY_LEN),
     };
     let mut buffer = [0u8; MAX_BINARY_LEN];
-    let Some(len) = get_value(write, flags, &mut buffer[..capacity])? else {
-        return Ok(None);
+    let len = match get_value(write, flags, &mut buffer[..capacity])? {
+        Lookup::Found(len) => len,
+        Lookup::Missing => return Ok(Original::Absent),
+        Lookup::Unreadable => return Ok(Original::Unknown),
     };
     let bytes = &buffer[..len];
     Ok(match &write.data {
         RegistryData::Dword(_) => <[u8; 4]>::try_from(bytes)
-            .ok()
-            .map(|b| RegistryData::Dword(u32::from_le_bytes(b))),
-        RegistryData::Binary(_) => Some(RegistryData::Binary(bytes.to_vec())),
+            .map(|b| Original::Value(RegistryData::Dword(u32::from_le_bytes(b))))
+            .unwrap_or(Original::Unknown),
+        RegistryData::Binary(_) => Original::Value(RegistryData::Binary(bytes.to_vec())),
     })
 }
 
@@ -52,7 +74,7 @@ fn get_value(
     write: &RegistryWrite,
     flags: REG_ROUTINE_FLAGS,
     buffer: &mut [u8],
-) -> Result<Option<usize>, RegistryError> {
+) -> Result<Lookup, RegistryError> {
     let mut len = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
     // SAFETY: `buffer` is valid for `len` bytes and both strings outlive the
     // call. The flags make the API reject any value of another type.
@@ -67,19 +89,19 @@ fn get_value(
             Some(&mut len),
         )
     };
-    if [
-        ERROR_FILE_NOT_FOUND,
-        ERROR_UNSUPPORTED_TYPE,
-        ERROR_MORE_DATA,
-    ]
-    .contains(&status)
-    {
-        return Ok(None);
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(Lookup::Missing);
     }
-    check(status, "read", write)?;
+    if [ERROR_UNSUPPORTED_TYPE, ERROR_MORE_DATA].contains(&status) {
+        return Ok(Lookup::Unreadable);
+    }
+    check(status, "read", write.key, write.name)?;
     // The API never reports more than it was given room for on success, but
     // the length indexes a buffer, so it is checked rather than trusted.
-    Ok(usize::try_from(len).ok().filter(|len| *len <= buffer.len()))
+    Ok(usize::try_from(len)
+        .ok()
+        .filter(|len| *len <= buffer.len())
+        .map_or(Lookup::Unreadable, Lookup::Found))
 }
 
 /// Creates the key if it does not exist yet.
@@ -110,18 +132,30 @@ pub fn set(write: &RegistryWrite) -> Result<(), RegistryError> {
             len,
         )
     };
-    check(status, "write", write)
+    check(status, "write", write.key, write.name)
+}
+
+/// Deletes a value. A value that is already gone is not an error.
+pub fn delete(key: &'static str, name: &'static str) -> Result<(), RegistryError> {
+    // SAFETY: both strings outlive the call.
+    let status =
+        unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, &HSTRING::from(key), &HSTRING::from(name)) };
+    if status == ERROR_FILE_NOT_FOUND {
+        return Ok(());
+    }
+    check(status, "delete", key, name)
 }
 
 fn check(
     status: WIN32_ERROR,
     action: &'static str,
-    write: &RegistryWrite,
+    key: &'static str,
+    name: &'static str,
 ) -> Result<(), RegistryError> {
     status.ok().map_err(|source| RegistryError {
         action,
-        key: write.key,
-        name: write.name,
+        key,
+        name,
         source,
     })
 }

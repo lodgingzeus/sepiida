@@ -4,6 +4,8 @@ mod cli;
 #[cfg(any(windows, test))]
 mod paths;
 #[cfg(windows)]
+mod restore;
+#[cfg(windows)]
 mod win;
 
 use anyhow::{Context, Result, bail};
@@ -28,6 +30,7 @@ fn main() -> Result<()> {
         }
         Command::Palette { image } => print_palette(&image),
         Command::Apply(options) => apply(options),
+        Command::Restore { dry_run } => restore(dry_run),
     }
 }
 
@@ -54,6 +57,16 @@ fn apply(_options: ApplyOptions) -> Result<()> {
 #[cfg(windows)]
 fn apply(options: ApplyOptions) -> Result<()> {
     apply::run_cli(options)
+}
+
+#[cfg(not(windows))]
+fn restore(_dry_run: bool) -> Result<()> {
+    bail!("`sepiida restore` only runs on Windows")
+}
+
+#[cfg(windows)]
+fn restore(dry_run: bool) -> Result<()> {
+    restore::run_cli(dry_run)
 }
 
 #[cfg(windows)]

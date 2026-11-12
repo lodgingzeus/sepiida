@@ -7,6 +7,7 @@ usage:
   sepiida                          open the settings window
   sepiida palette <image>          print the palette for an image
   sepiida apply [options]          theme Windows from the current wallpaper
+  sepiida restore [--dry-run]      put back the accent colour you had before sepiida
 
 apply options:
   --source auto|windows|wallpaper-engine   where to read the wallpaper (default: from settings)
@@ -22,6 +23,7 @@ pub enum Command {
     Help,
     Palette { image: String },
     Apply(ApplyOptions),
+    Restore { dry_run: bool },
 }
 
 /// What was given on the command line. `None` means "use the setting".
@@ -68,8 +70,11 @@ pub enum CliError {
     UnknownCommand(String),
     #[error("`palette` takes exactly one image path")]
     PaletteArguments,
-    #[error("unknown option `{0}` for `apply`")]
-    UnknownOption(String),
+    #[error("unknown option `{option}` for `{command}`")]
+    UnknownOption {
+        command: &'static str,
+        option: String,
+    },
     #[error("option `{0}` needs a value")]
     MissingValue(&'static str),
     #[error("option `{0}` was given more than once")]
@@ -88,6 +93,13 @@ pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, CliError> {
         }),
         ["palette", ..] => Err(CliError::PaletteArguments),
         ["apply", options @ ..] => parse_apply(options).map(Command::Apply),
+        ["restore"] => Ok(Command::Restore { dry_run: false }),
+        ["restore", "--dry-run"] => Ok(Command::Restore { dry_run: true }),
+        ["restore", "--dry-run", "--dry-run", ..] => Err(CliError::Repeated("--dry-run")),
+        ["restore", other, ..] => Err(CliError::UnknownOption {
+            command: "restore",
+            option: (*other).to_owned(),
+        }),
         [other, ..] => Err(CliError::UnknownCommand((*other).to_owned())),
     }
 }
@@ -125,7 +137,12 @@ fn parse_apply(args: &[&str]) -> Result<ApplyOptions, CliError> {
                 }
             }
             "--dry-run" => dry_run = true,
-            other => return Err(CliError::UnknownOption(other.to_owned())),
+            other => {
+                return Err(CliError::UnknownOption {
+                    command: "apply",
+                    option: other.to_owned(),
+                });
+            }
         }
     }
 
@@ -270,8 +287,32 @@ mod tests {
         );
         assert_eq!(
             apply(&["apply", "--verbose"]),
-            Err(CliError::UnknownOption("--verbose".to_owned()))
+            Err(CliError::UnknownOption {
+                command: "apply",
+                option: "--verbose".to_owned()
+            })
         );
+    }
+
+    #[test]
+    fn restore_takes_only_dry_run() {
+        assert_eq!(parse(&["restore"]), Ok(Command::Restore { dry_run: false }));
+        assert_eq!(
+            parse(&["restore", "--dry-run"]),
+            Ok(Command::Restore { dry_run: true })
+        );
+        assert_eq!(
+            parse(&["restore", "--dry-run", "--dry-run"]),
+            Err(CliError::Repeated("--dry-run"))
+        );
+        assert!(matches!(
+            parse(&["restore", "--dry-run", "--force"]),
+            Err(CliError::UnknownOption { .. })
+        ));
+        assert!(matches!(
+            parse(&["restore", "--force"]),
+            Err(CliError::UnknownOption { .. })
+        ));
     }
 
     #[test]

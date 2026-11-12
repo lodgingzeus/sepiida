@@ -25,6 +25,7 @@ sepiida apply                    set the accent colour from the current wallpape
 sepiida apply --dry-run          show what would change without changing it
 sepiida apply --source windows   ignore Wallpaper Engine (or: wallpaper-engine, auto)
 sepiida apply --mode dark        also switch Windows to dark (or light) mode
+sepiida restore                  put back the accent colour you had before sepiida
 sepiida palette image.png        print the palette for an image
 ```
 
@@ -32,6 +33,12 @@ sepiida palette image.png        print the palette for an image
 turns off "Automatically pick an accent colour from my background", which
 would otherwise overwrite it. Light/dark mode is left alone unless `--mode`
 is given or the settings file asks for it.
+
+Before it first changes a registry value, `apply` saves the old value in
+`%LOCALAPPDATA%\sepiida\saved-theme.json`. `sepiida restore` puts those
+values back (including "Automatically pick an accent colour") and deletes
+the file. If that file is damaged, `apply` stops rather than overwrite your
+original colours with sepiida's.
 
 ## Settings
 

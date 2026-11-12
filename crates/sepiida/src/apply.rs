@@ -4,19 +4,22 @@
 //! command line and the background agent share it and differ only in how
 //! they report.
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use sepiida_core::{
     Palette,
     accent::{AccentValues, RegistryWrite},
     cache::PaletteCache,
     config::Config,
+    snapshot::Snapshot,
     source::{Resolved, SourceError, Wallpaper, resolve},
 };
 
 use crate::{
     cli::{ApplyOptions, ApplySettings},
     paths::Paths,
-    win::{desktop::WindowsWallpaper, theme, wallpaper_engine::WallpaperEngine},
+    win::{desktop::WindowsWallpaper, registry, theme, wallpaper_engine::WallpaperEngine},
 };
 
 /// Where the palette came from.
@@ -81,7 +84,24 @@ pub fn prepare(settings: &ApplySettings, cache: &mut PaletteCache) -> Result<Pre
 }
 
 /// Writes the pending values and broadcasts the change once.
-pub fn commit(prepared: &Prepared) -> Result<()> {
+///
+/// Before the first change to any value, its current value is saved to
+/// `saved_theme` so `sepiida restore` can put it back. Nothing is written if
+/// that cannot be saved.
+pub fn commit(prepared: &Prepared, saved_theme: &Path) -> Result<()> {
+    let mut snapshot = Snapshot::load(saved_theme).with_context(|| {
+        format!(
+            "refusing to change colours without a backup; delete {} to start a new one",
+            saved_theme.display()
+        )
+    })?;
+    let unrecorded = snapshot.unrecorded(&prepared.pending);
+    if !unrecorded.is_empty() {
+        for write in unrecorded {
+            snapshot.record(write, registry::read_original(write)?);
+        }
+        snapshot.save(saved_theme)?;
+    }
     theme::apply(&prepared.pending)?;
     Ok(())
 }
@@ -118,7 +138,7 @@ pub fn run_cli(options: ApplyOptions) -> Result<()> {
         println!("dry run: nothing was changed");
         return Ok(());
     }
-    commit(&prepared)?;
+    commit(&prepared, &paths.saved_theme)?;
     println!("applied");
     Ok(())
 }
