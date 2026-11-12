@@ -1,7 +1,7 @@
 //! Reading a Wallpaper Engine project from disk.
 //!
 //! Everything here is untrusted input: `project.json` comes from the Steam
-//! Workshop and the path comes from another program's output.
+//! Workshop and the path comes from Wallpaper Engine's own settings file.
 
 use std::{
     fs::File,
@@ -17,9 +17,6 @@ const PROJECT_FILE: &str = "project.json";
 /// Real project files are a few kilobytes. The cap keeps a broken or hostile
 /// file from being read into memory whole.
 const MAX_PROJECT_BYTES: u64 = 1024 * 1024;
-/// Longest path Windows accepts, in UTF-16 units; anything longer is not a
-/// path.
-const MAX_PATH_CHARS: usize = 32_767;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
@@ -41,14 +38,6 @@ pub enum ProjectError {
     },
     #[error("the project in `{0}` has neither a scheme colour nor a usable preview image")]
     NothingUsable(PathBuf),
-}
-
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub enum OutputError {
-    #[error("Wallpaper Engine returned text that is not valid UTF-8")]
-    NotUtf8,
-    #[error("Wallpaper Engine returned something that is not a file path")]
-    NotAPath,
 }
 
 /// What sepiida needs from a `project.json`.
@@ -93,19 +82,6 @@ pub fn parse_scheme_color(text: &str) -> Option<Color> {
     });
     let color = Color::new(channels.next()??, channels.next()??, channels.next()??);
     channels.next().is_none().then_some(color)
-}
-
-/// Extracts the path from the output of `-control getWallpaper`. `Ok(None)`
-/// means Wallpaper Engine printed nothing, so no wallpaper is active.
-pub fn parse_get_wallpaper_output(stdout: &[u8]) -> Result<Option<String>, OutputError> {
-    let text = std::str::from_utf8(stdout).map_err(|_| OutputError::NotUtf8)?;
-    let Some(line) = text.lines().map(str::trim).find(|line| !line.is_empty()) else {
-        return Ok(None);
-    };
-    if line.chars().any(char::is_control) || line.encode_utf16().count() > MAX_PATH_CHARS {
-        return Err(OutputError::NotAPath);
-    }
-    Ok(Some(line.to_owned()))
 }
 
 /// Resolves the wallpaper Wallpaper Engine reports (a file inside a project
@@ -252,33 +228,6 @@ mod tests {
         assert_eq!(Project::parse(b"[]").expect("parsed"), Project::default());
         assert!(Project::parse(b"{").is_err());
         assert!(Project::parse(b"").is_err());
-    }
-
-    #[test]
-    fn output_is_trimmed_to_the_first_line() {
-        assert_eq!(
-            parse_get_wallpaper_output(b"\r\n  C:\\Steam\\431960\\1\\scene.pkg \r\nextra\r\n"),
-            Ok(Some(r"C:\Steam\431960\1\scene.pkg".to_owned()))
-        );
-        assert_eq!(parse_get_wallpaper_output(b""), Ok(None));
-        assert_eq!(parse_get_wallpaper_output(b" \r\n\n"), Ok(None));
-    }
-
-    #[test]
-    fn output_that_is_not_a_path_is_rejected() {
-        assert_eq!(
-            parse_get_wallpaper_output(&[0xff, 0xfe, 0x41]),
-            Err(OutputError::NotUtf8)
-        );
-        assert_eq!(
-            parse_get_wallpaper_output(b"C:\\a\0b"),
-            Err(OutputError::NotAPath)
-        );
-        let long = "a".repeat(MAX_PATH_CHARS + 1);
-        assert_eq!(
-            parse_get_wallpaper_output(long.as_bytes()),
-            Err(OutputError::NotAPath)
-        );
     }
 
     #[test]

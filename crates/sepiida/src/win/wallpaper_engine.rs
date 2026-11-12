@@ -1,23 +1,18 @@
 //! Wallpaper Engine as a wallpaper source.
 //!
 //! Wallpaper Engine is found by looking for its running process, which also
-//! answers whether it is active at all. The current wallpaper is then asked
-//! for with its documented command line, `-control getWallpaper`.
+//! answers whether it is active at all. The current wallpaper is then read
+//! from `config.json` in its install folder: `-control getWallpaper` does not
+//! write to a pipe (see `sepiida_core::engine_config`), and reading a file
+//! means sepiida never starts another program.
 
-use std::{
-    io::Read,
-    os::windows::process::CommandExt,
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    sync::mpsc,
-    thread,
-    time::Duration,
-};
+use std::{path::PathBuf, thread};
 
 use sepiida_core::{
+    engine_config::read_selected_wallpaper,
     engine_tracker::Observed,
     source::{SourceError, Wallpaper, WallpaperSource},
-    wallpaper_engine::{parse_get_wallpaper_output, project_wallpaper},
+    wallpaper_engine::project_wallpaper,
 };
 use windows::{
     Win32::{
@@ -37,24 +32,15 @@ use windows::{
 };
 
 const PROCESS_NAMES: [&str; 2] = ["wallpaper64.exe", "wallpaper32.exe"];
-/// The command only forwards a request to the running instance, so it
-/// answers at once. The limit is for an instance that has stopped responding.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
-/// A path is at most 32,767 UTF-16 units; this leaves room for it in UTF-8.
-const MAX_OUTPUT_BYTES: u64 = 128 * 1024;
 /// Longest path `QueryFullProcessImageNameW` can return, in UTF-16 units.
 const MAX_IMAGE_PATH: usize = 32_768;
-/// From `winbase.h`. Keeps a console window from flashing up.
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Debug, thiserror::Error)]
 enum EngineError {
     #[error("could not list running processes")]
     ProcessList(#[source] windows::core::Error),
-    #[error("could not run `{}`", .0.display())]
-    Launch(PathBuf, #[source] std::io::Error),
-    #[error("Wallpaper Engine did not answer within {} seconds", COMMAND_TIMEOUT.as_secs())]
-    Timeout,
+    #[error("`{}` has no install folder", .0.display())]
+    NoFolder(PathBuf),
     #[error("Wallpaper Engine reported `{0}`, which is not an absolute path")]
     RelativePath(String),
 }
@@ -66,8 +52,10 @@ impl WallpaperSource for WallpaperEngine {
         let Some((_, executable)) = running_executable()? else {
             return Ok(None);
         };
-        let output = get_wallpaper(&executable)?;
-        let Some(reported) = parse_get_wallpaper_output(&output)? else {
+        let folder = executable
+            .parent()
+            .ok_or_else(|| EngineError::NoFolder(executable.clone()))?;
+        let Some(reported) = read_selected_wallpaper(folder)? else {
             return Ok(None);
         };
         let reported = PathBuf::from(reported);
@@ -176,42 +164,6 @@ fn image_path(process_id: u32) -> Option<PathBuf> {
     let written = buffer.get(..usize::try_from(len).ok()?)?;
     let path = PathBuf::from(String::from_utf16(written).ok()?);
     (path.is_absolute() && path.is_file()).then_some(path)
-}
-
-/// Runs `-control getWallpaper` and returns what it printed.
-fn get_wallpaper(executable: &Path) -> Result<Vec<u8>, EngineError> {
-    let mut child = Command::new(executable)
-        .args(["-control", "getWallpaper"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|error| EngineError::Launch(executable.to_owned(), error))?;
-
-    let output = read_with_timeout(&mut child);
-    if output.is_none() {
-        // Killing closes the pipe, which lets the reader thread finish. An
-        // error here means the process has already gone.
-        let _ = child.kill();
-    }
-    // Reap the process either way; its exit status carries no information.
-    let _ = child.wait();
-    output.ok_or(EngineError::Timeout)
-}
-
-fn read_with_timeout(child: &mut Child) -> Option<Vec<u8>> {
-    let stdout = child.stdout.take()?;
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let mut output = Vec::new();
-        // A read error leaves whatever arrived before it; the parser decides
-        // whether that is usable.
-        let _ = stdout.take(MAX_OUTPUT_BYTES).read_to_end(&mut output);
-        // The receiver is gone only after a timeout, when nobody wants it.
-        let _ = sender.send(output);
-    });
-    receiver.recv_timeout(COMMAND_TIMEOUT).ok()
 }
 
 struct OwnedHandle(HANDLE);

@@ -85,9 +85,8 @@ impl EngineWatch {
     fn watch(&mut self, folder: PathBuf) {
         let events = self.events.clone();
         let file = folder.join(CONFIG_FILE);
-        // Only a change in content counts. If asking Wallpaper Engine for
-        // its wallpaper makes it rewrite the same file, an apply must not
-        // trigger the next one.
+        // Only a change in content counts: Wallpaper Engine may rewrite the
+        // file without changing it, which must not cost an apply.
         let last = Mutex::new(content_hash(&file));
         let watched = file.clone();
         match FileWatcher::new(vec![file], MissingFolder::Fail, move || {
