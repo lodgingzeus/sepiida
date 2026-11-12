@@ -1,10 +1,17 @@
 # sepiida
 
-An adaptive theming engine for the Windows shell. sepiida reads the wallpaper
-shown by [Wallpaper Engine](https://www.wallpaperengine.io/), derives a colour
-palette from it, and applies it to Windows itself: accent colour, light/dark
-mode, taskbar, Start menu and File Explorer. Ordinary applications are left
-alone.
+An adaptive theming engine for the Windows shell. sepiida reads your current
+desktop wallpaper, derives a colour palette from it, and applies it to Windows
+itself: accent colour, light/dark mode, taskbar, Start menu and File Explorer.
+Ordinary applications are left alone.
+
+It works with two wallpaper sources:
+
+- the normal Windows wallpaper (picture, slideshow or Windows Spotlight)
+- [Wallpaper Engine](https://www.wallpaperengine.io/), which is optional
+
+By default sepiida follows Wallpaper Engine when it is running and showing a
+wallpaper, and the Windows wallpaper otherwise.
 
 > **Status: early development.** Only palette extraction works today. Later
 > versions load a DLL into Windows shell processes; until that is stable,
