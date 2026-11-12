@@ -1,6 +1,10 @@
 //! Where the wallpaper comes from, and which source wins.
 
-use std::{fmt, path::PathBuf, str::FromStr};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use crate::Color;
 
@@ -53,6 +57,27 @@ impl FromStr for SourceChoice {
             other => Err(UnknownSourceChoice(other.to_owned())),
         }
     }
+}
+
+/// Turns what `IDesktopWallpaper` reports into a wallpaper.
+///
+/// `reported` is the picture path for the monitor; Windows returns an empty
+/// string when the background is a solid colour. `transcoded` is the copy of
+/// the current wallpaper that Windows keeps, used when the reported file has
+/// gone (a deleted download, a disconnected drive).
+pub fn windows_wallpaper(
+    reported: &str,
+    transcoded: Option<&Path>,
+    background: Color,
+) -> Option<Wallpaper> {
+    if reported.is_empty() {
+        return Some(Wallpaper::Color(background));
+    }
+    [Some(Path::new(reported)), transcoded]
+        .into_iter()
+        .flatten()
+        .find(|path| path.is_file())
+        .map(|path| Wallpaper::Image(path.to_owned()))
 }
 
 pub type SourceError = Box<dyn std::error::Error + Send + Sync>;
@@ -148,6 +173,44 @@ mod tests {
 
     fn scene() -> Wallpaper {
         Wallpaper::Color(Color::new(1, 2, 3))
+    }
+
+    #[test]
+    fn windows_wallpaper_handles_solid_colours_and_missing_files() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let picture = dir.path().join("picture.jpg");
+        let transcoded = dir.path().join("TranscodedWallpaper");
+        let missing = dir.path().join("missing.jpg");
+        std::fs::write(&picture, b"x").expect("write file");
+        std::fs::write(&transcoded, b"x").expect("write file");
+        let background = Color::new(9, 8, 7);
+        let reported = |path: &Path| path.to_str().expect("utf-8 path").to_owned();
+
+        assert_eq!(
+            windows_wallpaper("", Some(&transcoded), background),
+            Some(Wallpaper::Color(background))
+        );
+        assert_eq!(
+            windows_wallpaper(&reported(&picture), Some(&transcoded), background),
+            Some(Wallpaper::Image(picture))
+        );
+        assert_eq!(
+            windows_wallpaper(&reported(&missing), Some(&transcoded), background),
+            Some(Wallpaper::Image(transcoded))
+        );
+        assert_eq!(
+            windows_wallpaper(&reported(&missing), Some(&missing), background),
+            None
+        );
+        assert_eq!(
+            windows_wallpaper(&reported(&missing), None, background),
+            None
+        );
+        // A directory is not a picture.
+        assert_eq!(
+            windows_wallpaper(&reported(dir.path()), None, background),
+            None
+        );
     }
 
     #[test]

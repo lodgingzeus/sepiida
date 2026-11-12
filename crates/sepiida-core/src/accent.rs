@@ -4,7 +4,7 @@
 //! Keeping the conversions here, away from the registry code, lets them be
 //! tested byte for byte on any platform.
 
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
 use material_colors::{color::Rgb, hct::Hct};
 
@@ -116,6 +116,74 @@ impl AccentValues {
     }
 }
 
+const ACCENT_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent";
+const DWM_KEY: &str = r"Software\Microsoft\Windows\DWM";
+const DESKTOP_KEY: &str = r"Control Panel\Desktop";
+const PERSONALIZE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegistryData {
+    Dword(u32),
+    Binary(Vec<u8>),
+}
+
+impl fmt::Display for RegistryData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dword(value) => write!(f, "0x{value:08x}"),
+            Self::Binary(bytes) => bytes.iter().try_for_each(|b| write!(f, "{b:02x}")),
+        }
+    }
+}
+
+/// One value to set under `HKEY_CURRENT_USER`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryWrite {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub data: RegistryData,
+}
+
+impl RegistryWrite {
+    const fn dword(key: &'static str, name: &'static str, value: u32) -> Self {
+        Self {
+            key,
+            name,
+            data: RegistryData::Dword(value),
+        }
+    }
+}
+
+impl AccentValues {
+    pub fn registry_writes(&self) -> Vec<RegistryWrite> {
+        vec![
+            RegistryWrite {
+                key: ACCENT_KEY,
+                name: "AccentPalette",
+                data: RegistryData::Binary(self.palette.to_vec()),
+            },
+            RegistryWrite::dword(ACCENT_KEY, "AccentColorMenu", self.accent_color_menu),
+            RegistryWrite::dword(ACCENT_KEY, "StartColorMenu", self.start_color_menu),
+            RegistryWrite::dword(DWM_KEY, "AccentColor", self.dwm_accent_color),
+            RegistryWrite::dword(DWM_KEY, "ColorizationColor", self.colorization_color),
+            RegistryWrite::dword(DWM_KEY, "ColorizationAfterglow", self.colorization_color),
+            // Stops Windows from replacing our accent with its own pick from
+            // the wallpaper.
+            RegistryWrite::dword(DESKTOP_KEY, "AutoColorization", 0),
+        ]
+    }
+}
+
+impl ThemeMode {
+    pub fn registry_writes(self) -> Vec<RegistryWrite> {
+        let light = u32::from(self == Self::Light);
+        vec![
+            RegistryWrite::dword(PERSONALIZE_KEY, "AppsUseLightTheme", light),
+            RegistryWrite::dword(PERSONALIZE_KEY, "SystemUsesLightTheme", light),
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +199,65 @@ mod tests {
         assert_eq!("light".parse(), Ok(ThemeMode::Light));
         assert_eq!("dark".parse(), Ok(ThemeMode::Dark));
         assert!("auto".parse::<ThemeMode>().is_err());
+    }
+
+    fn find<'a>(writes: &'a [RegistryWrite], name: &str) -> &'a RegistryData {
+        match writes.iter().find(|w| w.name == name) {
+            Some(write) => &write.data,
+            None => panic!("no write for {name}"),
+        }
+    }
+
+    #[test]
+    fn accent_writes_carry_the_values_under_their_keys() {
+        let v = AccentValues::from_color(Color::new(40, 180, 60));
+        let writes = v.registry_writes();
+        assert_eq!(
+            find(&writes, "AccentPalette"),
+            &RegistryData::Binary(v.palette.to_vec())
+        );
+        assert_eq!(
+            find(&writes, "AccentColorMenu"),
+            &RegistryData::Dword(v.accent_color_menu)
+        );
+        assert_eq!(
+            find(&writes, "ColorizationColor"),
+            &RegistryData::Dword(v.colorization_color)
+        );
+        assert_eq!(find(&writes, "AutoColorization"), &RegistryData::Dword(0));
+        assert!(
+            writes
+                .iter()
+                .all(|w| !w.key.starts_with('\\') && !w.key.ends_with('\\'))
+        );
+        let mut names: Vec<_> = writes.iter().map(|w| (w.key, w.name)).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), writes.len(), "duplicate registry value");
+    }
+
+    #[test]
+    fn mode_writes_set_both_light_theme_flags() {
+        for (mode, flag) in [(ThemeMode::Light, 1), (ThemeMode::Dark, 0)] {
+            let writes = mode.registry_writes();
+            assert_eq!(
+                find(&writes, "AppsUseLightTheme"),
+                &RegistryData::Dword(flag)
+            );
+            assert_eq!(
+                find(&writes, "SystemUsesLightTheme"),
+                &RegistryData::Dword(flag)
+            );
+        }
+    }
+
+    #[test]
+    fn registry_data_prints_as_hex() {
+        assert_eq!(RegistryData::Dword(0xff56_3412).to_string(), "0xff563412");
+        assert_eq!(
+            RegistryData::Binary(vec![0, 0x1f, 0xff]).to_string(),
+            "001fff"
+        );
     }
 
     #[test]

@@ -25,7 +25,13 @@ notify = "8"
 directories = "6"
 slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
 slint-build = "1.18"
-windows = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 # The hook DLL runs inside explorer.exe and must catch panics at every FFI
 # boundary, so the whole workspace keeps the default panic = "unwind".

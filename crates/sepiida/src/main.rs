@@ -1,4 +1,8 @@
+#[cfg(windows)]
+mod apply;
 mod cli;
+#[cfg(windows)]
+mod win;
 
 use anyhow::{Context, Result, bail};
 use sepiida_core::{Palette, Tones};
@@ -46,8 +50,8 @@ fn apply(_options: ApplyOptions) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn apply(_options: ApplyOptions) -> Result<()> {
-    bail!("`sepiida apply` is not implemented yet")
+fn apply(options: ApplyOptions) -> Result<()> {
+    apply::run(options)
 }
 
 #[cfg(windows)]
