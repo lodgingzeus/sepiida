@@ -11,3 +11,6 @@ repository.workspace = true
 image.workspace = true
 material-colors.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

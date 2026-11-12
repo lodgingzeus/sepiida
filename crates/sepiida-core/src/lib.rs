@@ -1,8 +1,11 @@
 //! Platform-independent colour engine: wallpaper image in, palette out.
 
+pub mod accent;
+pub mod source;
+
 use std::{fmt, path::Path};
 
-use image::{DynamicImage, imageops::FilterType};
+use image::{DynamicImage, ImageReader, imageops::FilterType};
 use material_colors::{color::Rgb, image::extract_color, scheme::Scheme, theme::ThemeBuilder};
 
 /// Quantization time grows with pixel count and the result barely changes
@@ -11,7 +14,9 @@ const SAMPLE_SIZE: u32 = 128;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("failed to read image")]
+    #[error("failed to open image")]
+    Io(#[from] std::io::Error),
+    #[error("failed to decode image")]
     Image(#[from] image::ImageError),
 }
 
@@ -25,6 +30,18 @@ pub struct Color {
 impl fmt::Display for Color {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+    }
+}
+
+impl Color {
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+}
+
+impl From<Color> for Rgb {
+    fn from(c: Color) -> Self {
+        Self::new(c.r, c.g, c.b)
     }
 }
 
@@ -77,8 +94,23 @@ impl Palette {
         Self::from_source(extract_color(&pixels))
     }
 
+    /// The format is detected from the file contents, not the extension:
+    /// the copy of the wallpaper that Windows keeps has no extension.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, Error> {
-        Ok(Self::from_image(&image::open(path)?))
+        let reader = ImageReader::open(path)?.with_guessed_format()?;
+        Ok(Self::from_image(&reader.decode()?))
+    }
+
+    /// For a solid-colour background, where there is no image to analyse.
+    pub fn from_color(color: Color) -> Self {
+        Self::from_source(color.into())
+    }
+
+    pub fn from_wallpaper(wallpaper: &source::Wallpaper) -> Result<Self, Error> {
+        match wallpaper {
+            source::Wallpaper::Image(path) => Self::from_path(path),
+            source::Wallpaper::Color(color) => Ok(Self::from_color(*color)),
+        }
     }
 
     fn from_source(source: Rgb) -> Self {
@@ -126,6 +158,39 @@ mod tests {
         assert!(
             green.g > green.r && green.g > green.b,
             "expected a green source, got {green}"
+        );
+    }
+
+    #[test]
+    fn from_path_detects_the_format_without_an_extension() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("TranscodedWallpaper");
+        solid(40, 180, 60)
+            .save_with_format(&path, image::ImageFormat::Png)
+            .expect("write image");
+        let from_file = Palette::from_path(&path).expect("palette");
+        assert_eq!(from_file, Palette::from_image(&solid(40, 180, 60)));
+    }
+
+    #[test]
+    fn from_path_reports_missing_and_corrupt_files() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        assert!(matches!(
+            Palette::from_path(dir.path().join("missing.png")),
+            Err(Error::Io(_))
+        ));
+        let corrupt = dir.path().join("corrupt.png");
+        std::fs::write(&corrupt, b"not an image").expect("write file");
+        assert!(matches!(Palette::from_path(&corrupt), Err(Error::Image(_))));
+    }
+
+    #[test]
+    fn from_color_keeps_the_colour_as_source() {
+        let color = Color::new(40, 180, 60);
+        assert_eq!(Palette::from_color(color).source, color);
+        assert_eq!(
+            Palette::from_wallpaper(&source::Wallpaper::Color(color)).expect("palette"),
+            Palette::from_color(color)
         );
     }
 

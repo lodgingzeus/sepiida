@@ -1,20 +1,27 @@
+mod cli;
+
 use anyhow::{Context, Result, bail};
 use sepiida_core::{Palette, Tones};
+
+use crate::cli::{ApplyOptions, Command};
 
 #[cfg(windows)]
 slint::include_modules!();
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .as_slice()
-    {
-        ["palette", path] => print_palette(path),
-        [] => run_settings(),
-        _ => bail!("usage: sepiida [palette <image>]"),
+    let command = match cli::parse(&args) {
+        Ok(command) => command,
+        Err(error) => bail!("{error}\n\n{}", cli::USAGE),
+    };
+    match command {
+        Command::Settings => run_settings(),
+        Command::Help => {
+            println!("{}", cli::USAGE);
+            Ok(())
+        }
+        Command::Palette { image } => print_palette(&image),
+        Command::Apply(options) => apply(options),
     }
 }
 
@@ -31,6 +38,16 @@ fn print_tones(mode: &str, t: &Tones) {
         "{mode:<7} accent {}  on-accent {}  surface {}  on-surface {}",
         t.accent, t.on_accent, t.surface, t.on_surface
     );
+}
+
+#[cfg(not(windows))]
+fn apply(_options: ApplyOptions) -> Result<()> {
+    bail!("`sepiida apply` only runs on Windows; try `sepiida palette <image>`")
+}
+
+#[cfg(windows)]
+fn apply(_options: ApplyOptions) -> Result<()> {
+    bail!("`sepiida apply` is not implemented yet")
 }
 
 #[cfg(windows)]

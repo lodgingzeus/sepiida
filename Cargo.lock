@@ -3531,6 +3531,7 @@ dependencies = [
  "sepiida-core",
  "slint",
  "slint-build",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3539,6 +3540,7 @@ version = "0.1.0-alpha.0"
 dependencies = [
  "image",
  "material-colors",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
