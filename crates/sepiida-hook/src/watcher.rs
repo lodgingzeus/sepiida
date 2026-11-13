@@ -173,9 +173,9 @@ pub fn run_command(command: Command) {
             None => log!("state: no visual tree seen on this thread"),
         }
         match command {
-            Command::SetColor(color) => {
+            Command::SetColor(role, color) => {
                 if let Some(state) = slot.as_mut() {
-                    state.styler.set_color(color);
+                    state.styler.set_color(role, color);
                 }
                 None
             }

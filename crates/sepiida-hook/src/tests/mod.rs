@@ -11,7 +11,7 @@ use std::{
 use sepiida_core::{
     Color,
     shell::protocol::{CONTROL_WINDOW_CLASS, Command, TAP_CLSID},
-    shell::rules::{RECTANGLE_TYPE, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME},
+    shell::rules::{RECTANGLE_TYPE, Role, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME},
 };
 use windows::{
     Win32::{
@@ -140,7 +140,10 @@ fn attach_style_restore_reattach_detach() {
     assert!(control_window().is_some());
 
     // Colour: shared brush, its colour set through the diagnostics API.
-    send(Command::SetColor(Color::new(0x33, 0x66, 0x99)));
+    send(Command::SetColor(
+        Role::Surface,
+        Color::new(0x33, 0x66, 0x99),
+    ));
     assert!(first.has(&format!("CreateInstance {BRUSH} null -> 0x1000")));
     assert!(first.has("GetPropertyValuesChain 0x1000"));
     assert!(first.has("CreateInstance Windows.UI.Color #FF336699 -> 0x1001"));
@@ -148,7 +151,7 @@ fn attach_style_restore_reattach_detach() {
     assert!(first.has(&format!("SetProperty 0x5 {FILL_INDEX} 0x1000")));
 
     // A second colour reuses the brush.
-    send(Command::SetColor(Color::new(1, 2, 3)));
+    send(Command::SetColor(Role::Surface, Color::new(1, 2, 3)));
     assert_eq!(
         first.count(&format!("CreateInstance {BRUSH} null -> 0x1000")),
         1
@@ -166,7 +169,7 @@ fn attach_style_restore_reattach_detach() {
 
     // Attach again without detaching: the first attachment is unadvised and
     // its styled taskbar restored before the new one takes over.
-    send(Command::SetColor(Color::new(9, 9, 9)));
+    send(Command::SetColor(Role::Surface, Color::new(9, 9, 9)));
     let (second, site2) = new_fake();
     let tap2 = new_tap();
     // SAFETY: plain COM call.
@@ -182,7 +185,7 @@ fn attach_style_restore_reattach_detach() {
     assert_eq!(first.calls().len(), before);
 
     // Detach: restore, unadvise, window gone.
-    send(Command::SetColor(Color::new(4, 5, 6)));
+    send(Command::SetColor(Role::Surface, Color::new(4, 5, 6)));
     send(Command::Detach);
     assert!(second.has(&format!("SetProperty 0x5 {FILL_INDEX} {LIVE_FILL:#x}")));
     wait_until("Unadvise of the second attachment", || {

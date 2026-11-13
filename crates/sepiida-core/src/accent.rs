@@ -79,6 +79,17 @@ const GREY_CHROMA: f64 = 4.0;
 /// Source chroma from which the wallpaper gets the full Material accent.
 const COLOURFUL_CHROMA: f64 = 16.0;
 
+/// The hue of the palette's accent, with its colourfulness scaled by how
+/// colourful the wallpaper is (see `AccentValues::from_palette`). Shared
+/// with the shell colours so that both agree on grey wallpapers.
+pub fn hue_and_chroma(palette: &Palette) -> (f64, f64) {
+    let accent = Hct::new(palette.light.accent.into());
+    let source = Hct::new(palette.source.into()).get_chroma();
+    let share = ((source - GREY_CHROMA) / (COLOURFUL_CHROMA - GREY_CHROMA)).clamp(0.0, 1.0);
+    let chroma = source.max(accent.get_chroma() * share);
+    (accent.get_hue(), chroma.min(accent.get_chroma()))
+}
+
 impl AccentValues {
     /// Uses the hue of the palette's accent, with its colourfulness scaled
     /// by how colourful the wallpaper is: the Material accent always has
@@ -87,11 +98,8 @@ impl AccentValues {
     /// clearly coloured ones the full Material accent, pale tints in
     /// between.
     pub fn from_palette(palette: &Palette) -> Self {
-        let accent = Hct::new(palette.light.accent.into());
-        let source = Hct::new(palette.source.into()).get_chroma();
-        let share = ((source - GREY_CHROMA) / (COLOURFUL_CHROMA - GREY_CHROMA)).clamp(0.0, 1.0);
-        let chroma = source.max(accent.get_chroma() * share);
-        Self::from_hue_chroma(accent.get_hue(), chroma.min(accent.get_chroma()))
+        let (hue, chroma) = hue_and_chroma(palette);
+        Self::from_hue_chroma(hue, chroma)
     }
 
     /// Builds the shades from the hue and colourfulness of `color`. Its

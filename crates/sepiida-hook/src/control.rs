@@ -8,7 +8,7 @@
 
 use std::cell::Cell;
 
-use sepiida_core::shell::protocol::{CONTROL_WINDOW_CLASS, Command};
+use sepiida_core::shell::protocol::{CONTROL_WINDOW_CLASS, Command, control_window_title};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -35,6 +35,7 @@ pub fn ensure_window() {
         return;
     };
     let class = HSTRING::from(CONTROL_WINDOW_CLASS);
+    let title = HSTRING::from(control_window_title());
     let class_info = WNDCLASSEXW {
         cbSize: size_of::<WNDCLASSEXW>() as u32,
         lpfnWndProc: Some(window_proc),
@@ -50,7 +51,7 @@ pub fn ensure_window() {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             &class,
-            &class,
+            &title,
             WINDOW_STYLE::default(),
             0,
             0,

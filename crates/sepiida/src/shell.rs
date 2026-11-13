@@ -2,7 +2,7 @@
 //! line (M3 spike).
 
 use anyhow::Result;
-use sepiida_core::shell::protocol::Command;
+use sepiida_core::shell::{protocol::Command, rules::Role};
 
 use crate::{
     cli::ShellCommand,
@@ -28,7 +28,7 @@ pub fn run_cli(command: ShellCommand) -> Result<()> {
             );
             report(&shell_hook::attach(&taskbar, &dll, from, method)?);
         }
-        ShellCommand::Color(color) => send(taskbar.pid, Command::SetColor(color))?,
+        ShellCommand::Color(color) => send(taskbar.pid, Command::SetColor(Role::Surface, color))?,
         ShellCommand::Restore => send(taskbar.pid, Command::Restore)?,
         ShellCommand::Detach => send(taskbar.pid, Command::Detach)?,
     }

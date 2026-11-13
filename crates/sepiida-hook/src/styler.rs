@@ -9,7 +9,10 @@
 
 use std::collections::HashMap;
 
-use sepiida_core::{Color, shell::protocol::xaml_color, shell::tree::Handle};
+use sepiida_core::{
+    Color,
+    shell::{protocol::xaml_color, rules::Role, tree::Handle},
+};
 use windows::core::{IUnknown, Interface};
 
 use crate::{
@@ -109,7 +112,10 @@ impl Styler {
     /// Paints every taskbar background in `color`. If the brush cannot take
     /// the colour, nothing is painted and the previous colour (if any)
     /// stays: an uncoloured brush would make the taskbar transparent.
-    pub fn set_color(&mut self, color: Color) {
+    pub fn set_color(&mut self, role: Role, color: Color) {
+        if role != Role::Surface {
+            return;
+        }
         if !self.update_brush(color) {
             return;
         }

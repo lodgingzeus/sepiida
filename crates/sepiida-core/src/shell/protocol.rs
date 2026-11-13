@@ -7,14 +7,26 @@
 //! parses a buffer from another process; every `(message, wParam)` pair
 //! either decodes to a command or is ignored.
 
+use super::rules::Role;
 use crate::Color;
 
 /// Class ID of the DLL's `IObjectWithSite` object, passed to
 /// `InitializeXamlDiagnosticsEx`.
 pub const TAP_CLSID: u128 = 0xb62a4d11_0403_4822_8c76_7ec4d7181ff1;
 
-/// Window class of the DLL's message-only command window.
+/// Window class of the DLL's message-only command window. Every version of
+/// the DLL uses it, so a new attach can find and detach older copies.
 pub const CONTROL_WINDOW_CLASS: &str = "sepiida.hook.control";
+
+/// Version of the commands below. Bumped whenever their meaning changes;
+/// sepiida.exe sends commands only to control windows of its own version,
+/// except `Detach`, which every version understands.
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Title of a control window speaking `PROTOCOL_VERSION`.
+pub fn control_window_title() -> String {
+    format!("{CONTROL_WINDOW_CLASS} v{PROTOCOL_VERSION}")
+}
 
 /// System XAML names each XAML thread's diagnostics port
 /// `VisualDiagConnection<N>`, counting up as threads are created over the
@@ -48,14 +60,17 @@ pub fn ready_event_name(pid: u32) -> String {
 
 /// `WM_APP`: the start of the message range private to a window class.
 const WM_APP: u32 = 0x8000;
-const MSG_SET_COLOR: u32 = WM_APP + 0x5e1;
+// WM_APP + 0x5e1 was version 1's single taskbar colour; never reuse it.
+// Restore and Detach keep their numbers so that every version understands
+// them.
 const MSG_RESTORE: u32 = WM_APP + 0x5e2;
 const MSG_DETACH: u32 = WM_APP + 0x5e3;
+const MSG_SET_COLOR: u32 = WM_APP + 0x5e4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
-    /// Paint the taskbar background in this colour.
-    SetColor(Color),
+    /// Paint every target of this role in this colour.
+    SetColor(Role, Color),
     /// Put back the original brushes and keep watching.
     Restore,
     /// Put back the original brushes and stop watching. The DLL stays
@@ -67,9 +82,12 @@ impl Command {
     /// The message and `wParam` that carry this command.
     pub fn encode(self) -> (u32, usize) {
         match self {
-            Self::SetColor(c) => (
+            Self::SetColor(role, c) => (
                 MSG_SET_COLOR,
-                (usize::from(c.r) << 16) | (usize::from(c.g) << 8) | usize::from(c.b),
+                (usize::from(role.id()) << 24)
+                    | (usize::from(c.r) << 16)
+                    | (usize::from(c.g) << 8)
+                    | usize::from(c.b),
             ),
             Self::Restore => (MSG_RESTORE, 0),
             Self::Detach => (MSG_DETACH, 0),
@@ -77,16 +95,13 @@ impl Command {
     }
 
     /// The command a received message carries, or `None` for any other
-    /// message. Unused `wParam` bits must be zero.
+    /// message. Unused `wParam` bits must be zero and the role known.
     pub fn decode(message: u32, wparam: usize) -> Option<Self> {
         match (message, wparam) {
-            (MSG_SET_COLOR, w) if w <= 0x00ff_ffff => {
-                let channel = |shift: u32| ((w >> shift) & 0xff) as u8;
-                Some(Self::SetColor(Color::new(
-                    channel(16),
-                    channel(8),
-                    channel(0),
-                )))
+            (MSG_SET_COLOR, w) if w <= 0xffff_ffff => {
+                let byte = |shift: u32| ((w >> shift) & 0xff) as u8;
+                let role = Role::from_id(byte(24))?;
+                Some(Self::SetColor(role, Color::new(byte(16), byte(8), byte(0))))
             }
             (MSG_RESTORE, 0) => Some(Self::Restore),
             (MSG_DETACH, 0) => Some(Self::Detach),
@@ -107,9 +122,9 @@ mod tests {
     #[test]
     fn commands_round_trip() {
         for command in [
-            Command::SetColor(Color::new(0x12, 0x34, 0x56)),
-            Command::SetColor(Color::new(0, 0, 0)),
-            Command::SetColor(Color::new(255, 255, 255)),
+            Command::SetColor(Role::Surface, Color::new(0x12, 0x34, 0x56)),
+            Command::SetColor(Role::Accent, Color::new(0, 0, 0)),
+            Command::SetColor(Role::Surface, Color::new(255, 255, 255)),
             Command::Restore,
             Command::Detach,
         ] {
@@ -119,21 +134,37 @@ mod tests {
     }
 
     #[test]
-    fn colour_is_packed_as_rgb() {
-        let (_, wparam) = Command::SetColor(Color::new(0x12, 0x34, 0x56)).encode();
-        assert_eq!(wparam, 0x0012_3456);
+    fn colour_is_packed_as_role_then_rgb() {
+        let (_, wparam) = Command::SetColor(Role::Surface, Color::new(0x12, 0x34, 0x56)).encode();
+        assert_eq!(wparam, 0x0112_3456);
     }
 
     #[test]
-    fn stray_bits_and_other_messages_are_ignored() {
-        let (set, _) = Command::SetColor(Color::new(0, 0, 0)).encode();
+    fn stray_bits_unknown_roles_and_other_messages_are_ignored() {
+        let (set, _) = Command::SetColor(Role::Surface, Color::new(0, 0, 0)).encode();
         let (restore, _) = Command::Restore.encode();
         let (detach, _) = Command::Detach.encode();
-        assert_eq!(Command::decode(set, 0x0100_0000), None);
+        assert_eq!(Command::decode(set, 0x0012_3456), None); // role 0
+        assert_eq!(Command::decode(set, 0x0312_3456), None); // role 3
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(Command::decode(set, 0x1_0112_3456), None);
         assert_eq!(Command::decode(restore, 1), None);
         assert_eq!(Command::decode(detach, 1), None);
         assert_eq!(Command::decode(WM_APP, 0), None);
         assert_eq!(Command::decode(0x0010, 0), None); // WM_CLOSE
+        // Version 1's single-colour message.
+        assert_eq!(Command::decode(WM_APP + 0x5e1, 0x0012_3456), None);
+    }
+
+    #[test]
+    fn restore_and_detach_keep_their_version_1_numbers() {
+        assert_eq!(Command::Restore.encode(), (WM_APP + 0x5e2, 0));
+        assert_eq!(Command::Detach.encode(), (WM_APP + 0x5e3, 0));
+    }
+
+    #[test]
+    fn the_control_window_title_carries_the_version() {
+        assert_eq!(control_window_title(), "sepiida.hook.control v2");
     }
 
     #[test]
