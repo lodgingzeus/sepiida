@@ -14,6 +14,8 @@ use serde_json::Value;
 use crate::{Color, source::Wallpaper};
 
 const PROJECT_FILE: &str = "project.json";
+/// Wallpaper Engine's default `schemecolor`, left in place by most authors.
+const UNSET_SCHEME_COLOR: Color = Color::new(0, 0, 0);
 /// Real project files are a few kilobytes. The cap keeps a broken or hostile
 /// file from being read into memory whole.
 const MAX_PROJECT_BYTES: u64 = 1024 * 1024;
@@ -106,7 +108,13 @@ pub fn project_wallpaper(reported: &Path) -> Result<Wallpaper, ProjectError> {
         source,
     })?;
 
-    if let Some(color) = project.scheme_color {
+    // Black is the editor's default scheme colour, so it usually means "not
+    // set": the preview says more about the wallpaper. It still beats
+    // having nothing.
+    let chosen = project
+        .scheme_color
+        .filter(|&color| color != UNSET_SCHEME_COLOR);
+    if let Some(color) = chosen {
         return Ok(Wallpaper::Color(color));
     }
     project
@@ -114,6 +122,7 @@ pub fn project_wallpaper(reported: &Path) -> Result<Wallpaper, ProjectError> {
         .as_deref()
         .and_then(|name| preview_path(folder, name))
         .map(Wallpaper::Image)
+        .or(project.scheme_color.map(Wallpaper::Color))
         .ok_or_else(|| ProjectError::NothingUsable(folder.to_owned()))
 }
 
@@ -237,6 +246,23 @@ mod tests {
         assert_eq!(
             project_wallpaper(&dir.path().join("scene.pkg")).expect("wallpaper"),
             Wallpaper::Color(Color::new(195, 96, 19))
+        );
+    }
+
+    #[test]
+    fn default_black_scheme_color_defers_to_the_preview() {
+        let black = r#"{"preview": "preview.jpg",
+            "general": {"properties": {"schemecolor": {"value": "0 0 0"}}}}"#;
+        let dir = project(black);
+        let preview = dir.path().join("preview.jpg");
+        assert_eq!(
+            project_wallpaper(dir.path()).expect("black is still usable"),
+            Wallpaper::Color(Color::new(0, 0, 0))
+        );
+        fs::write(&preview, b"x").expect("write preview");
+        assert_eq!(
+            project_wallpaper(dir.path()).expect("wallpaper"),
+            Wallpaper::Image(preview)
         );
     }
 

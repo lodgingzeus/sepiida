@@ -86,16 +86,41 @@ pub fn windows_wallpaper(
 
 pub type SourceError = Box<dyn std::error::Error + Send + Sync>;
 
+/// Why a working source has no wallpaper to offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Absence {
+    /// The program behind the source (Wallpaper Engine) is not running.
+    NotRunning,
+    /// It runs, but no wallpaper is selected.
+    NoneSelected,
+}
+
+impl fmt::Display for Absence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotRunning => "is not running",
+            Self::NoneSelected => "is running but has no wallpaper selected",
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Showing {
+    Wallpaper(Wallpaper),
+    Nothing(Absence),
+}
+
 pub trait WallpaperSource {
-    /// `Ok(None)` means the source is working but showing nothing, for
-    /// example Wallpaper Engine not running.
-    fn current(&self) -> Result<Option<Wallpaper>, SourceError>;
+    /// `Showing::Nothing` means the source works but has no wallpaper, for
+    /// example Wallpaper Engine not running. Errors are for sources that
+    /// could not be read.
+    fn current(&self) -> Result<Showing, SourceError>;
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
-    #[error("{0} is not showing a wallpaper")]
-    NothingShown(SourceKind),
+    #[error("{kind} {absence}")]
+    NothingShown { kind: SourceKind, absence: Absence },
     #[error("could not read the {kind} wallpaper")]
     Source {
         kind: SourceKind,
@@ -124,12 +149,12 @@ pub fn resolve(
         SourceChoice::Windows => read(SourceKind::Windows, windows, None),
         SourceChoice::WallpaperEngine => read(SourceKind::WallpaperEngine, wallpaper_engine, None),
         SourceChoice::Auto => match wallpaper_engine.current() {
-            Ok(Some(wallpaper)) => Ok(Resolved {
+            Ok(Showing::Wallpaper(wallpaper)) => Ok(Resolved {
                 kind: SourceKind::WallpaperEngine,
                 wallpaper,
                 wallpaper_engine_error: None,
             }),
-            Ok(None) => read(SourceKind::Windows, windows, None),
+            Ok(Showing::Nothing(_)) => read(SourceKind::Windows, windows, None),
             Err(error) => read(SourceKind::Windows, windows, Some(error)),
         },
     }
@@ -141,12 +166,12 @@ fn read(
     wallpaper_engine_error: Option<SourceError>,
 ) -> Result<Resolved, ResolveError> {
     match source.current() {
-        Ok(Some(wallpaper)) => Ok(Resolved {
+        Ok(Showing::Wallpaper(wallpaper)) => Ok(Resolved {
             kind,
             wallpaper,
             wallpaper_engine_error,
         }),
-        Ok(None) => Err(ResolveError::NothingShown(kind)),
+        Ok(Showing::Nothing(absence)) => Err(ResolveError::NothingShown { kind, absence }),
         Err(error) => Err(ResolveError::Source { kind, error }),
     }
 }
@@ -162,10 +187,10 @@ mod tests {
     }
 
     impl WallpaperSource for Fake {
-        fn current(&self) -> Result<Option<Wallpaper>, SourceError> {
+        fn current(&self) -> Result<Showing, SourceError> {
             match self {
-                Self::Shows(w) => Ok(Some(w.clone())),
-                Self::Nothing => Ok(None),
+                Self::Shows(w) => Ok(Showing::Wallpaper(w.clone())),
+                Self::Nothing => Ok(Showing::Nothing(Absence::NotRunning)),
                 Self::Fails => Err("broken".into()),
             }
         }
@@ -263,7 +288,10 @@ mod tests {
     fn auto_fails_when_neither_source_has_a_wallpaper() {
         assert!(matches!(
             resolve(SourceChoice::Auto, &Fake::Nothing, &Fake::Nothing),
-            Err(ResolveError::NothingShown(SourceKind::Windows))
+            Err(ResolveError::NothingShown {
+                kind: SourceKind::Windows,
+                ..
+            })
         ));
         assert!(matches!(
             resolve(SourceChoice::Auto, &Fake::Fails, &Fake::Fails),
@@ -282,7 +310,10 @@ mod tests {
                 &Fake::Shows(picture()),
                 &Fake::Nothing
             ),
-            Err(ResolveError::NothingShown(SourceKind::WallpaperEngine))
+            Err(ResolveError::NothingShown {
+                kind: SourceKind::WallpaperEngine,
+                absence: Absence::NotRunning,
+            })
         ));
         assert!(matches!(
             resolve(
@@ -302,5 +333,22 @@ mod tests {
         )
         .expect("resolved");
         assert_eq!(r.kind, SourceKind::Windows);
+    }
+
+    #[test]
+    fn nothing_shown_says_why() {
+        let not_running = ResolveError::NothingShown {
+            kind: SourceKind::WallpaperEngine,
+            absence: Absence::NotRunning,
+        };
+        assert_eq!(not_running.to_string(), "Wallpaper Engine is not running");
+        let none_selected = ResolveError::NothingShown {
+            kind: SourceKind::WallpaperEngine,
+            absence: Absence::NoneSelected,
+        };
+        assert_eq!(
+            none_selected.to_string(),
+            "Wallpaper Engine is running but has no wallpaper selected"
+        );
     }
 }

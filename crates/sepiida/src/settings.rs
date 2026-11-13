@@ -11,9 +11,10 @@ use std::{cell::RefCell, path::PathBuf, thread};
 use anyhow::{Context, Result};
 use sepiida_core::{
     Color, Palette,
+    accent::AccentValues,
     cache::PaletteCache,
     config::Config,
-    source::{SourceChoice, resolve},
+    source::{ResolveError, SourceChoice, SourceKind, resolve},
 };
 use slint::ComponentHandle;
 use tracing::warn;
@@ -98,13 +99,33 @@ pub fn reload_preview(window: &SettingsWindow) {
                     show_preview(&window, Some((palette, from)));
                 }
                 Err(error) => {
-                    window.set_preview_text(format!("{error:#}").into());
+                    window.set_preview_text(error_text(&error).into());
                     show_preview(&window, None);
                 }
             });
         });
     if let Err(error) = spawned {
         warn!("could not read the wallpaper for the preview: {error}");
+    }
+}
+
+/// The error, plus what it means for the theme when the chosen source has
+/// nothing to show: an explicit choice never falls back to the other one.
+fn error_text(error: &anyhow::Error) -> String {
+    let nothing_shown = matches!(
+        error.downcast_ref::<ResolveError>(),
+        Some(ResolveError::NothingShown {
+            kind: SourceKind::WallpaperEngine,
+            ..
+        })
+    );
+    if nothing_shown {
+        format!(
+            "{error:#}. The colours stay as they are; choose Automatic to use the \
+             Windows wallpaper meanwhile."
+        )
+    } else {
+        format!("{error:#}")
     }
 }
 
@@ -140,10 +161,17 @@ fn show_preview(window: &SettingsWindow, wallpaper: Option<(Palette, String)>) {
         ),
         (None, None) => return,
     };
+    // The accent Windows actually gets, not the Material one.
+    let accent = AccentValues::from_palette(&palette).accent();
+    let (light, dark) = (palette.light.surface, palette.dark.surface);
     window.set_preview_source(to_slint(palette.source));
-    window.set_preview_accent(to_slint(palette.light.accent));
-    window.set_preview_light_surface(to_slint(palette.light.surface));
-    window.set_preview_dark_surface(to_slint(palette.dark.surface));
+    window.set_preview_source_label(to_slint(palette.source.readable_text()));
+    window.set_preview_accent(to_slint(accent));
+    window.set_preview_accent_label(to_slint(accent.readable_text()));
+    window.set_preview_light_surface(to_slint(light));
+    window.set_preview_light_surface_label(to_slint(light.readable_text()));
+    window.set_preview_dark_surface(to_slint(dark));
+    window.set_preview_dark_surface_label(to_slint(dark.readable_text()));
     window.set_preview_text(text.into());
 }
 

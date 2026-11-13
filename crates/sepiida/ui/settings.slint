@@ -2,6 +2,7 @@ import { ComboBox, GroupBox, Switch, VerticalBox, HorizontalBox } from "std-widg
 
 component Swatch inherits Rectangle {
     in property <string> label;
+    in property <color> label-color: #ffffff;
     height: 56px;
     border-radius: 8px;
     border-width: 1px;
@@ -13,9 +14,7 @@ component Swatch inherits Rectangle {
         x: 6px;
         y: parent.height - self.height - 4px;
         font-size: 11px;
-        color: #ffffff;
-        stroke: #00000080;
-        stroke-width: 1px;
+        color: root.label-color;
     }
 }
 
@@ -32,6 +31,11 @@ export component SettingsWindow inherits Window {
     in property <color> preview-accent: #808080;
     in property <color> preview-light-surface: #f0f0f0;
     in property <color> preview-dark-surface: #202020;
+    // Black or white, picked in Rust from each swatch's lightness.
+    in property <color> preview-source-label: #ffffff;
+    in property <color> preview-accent-label: #ffffff;
+    in property <color> preview-light-surface-label: #000000;
+    in property <color> preview-dark-surface-label: #ffffff;
     in property <string> preview-text: "Reading the wallpaper…";
 
     in-out property <int> source-index;
@@ -57,10 +61,26 @@ export component SettingsWindow inherits Window {
                 padding: 0;
                 HorizontalBox {
                     padding: 0;
-                    Swatch { background: root.preview-source; label: "Wallpaper"; }
-                    Swatch { background: root.preview-accent; label: "Accent"; }
-                    Swatch { background: root.preview-light-surface; label: "Light"; }
-                    Swatch { background: root.preview-dark-surface; label: "Dark"; }
+                    Swatch {
+                        background: root.preview-source;
+                        label: "Wallpaper";
+                        label-color: root.preview-source-label;
+                    }
+                    Swatch {
+                        background: root.preview-accent;
+                        label: "Accent";
+                        label-color: root.preview-accent-label;
+                    }
+                    Swatch {
+                        background: root.preview-light-surface;
+                        label: "Light";
+                        label-color: root.preview-light-surface-label;
+                    }
+                    Swatch {
+                        background: root.preview-dark-surface;
+                        label: "Dark";
+                        label-color: root.preview-dark-surface-label;
+                    }
                 }
                 Text { text: root.preview-text; wrap: word-wrap; }
             }

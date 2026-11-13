@@ -17,7 +17,7 @@ const MAX_ENTRIES: usize = 256;
 const MAX_CACHE_BYTES: u64 = 1024 * 1024;
 /// Bumped whenever the colour extraction changes, so old results are
 /// dropped instead of reused.
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 
 /// Identifies one version of one wallpaper file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

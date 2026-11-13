@@ -75,8 +75,17 @@ pub struct AccentValues {
 }
 
 impl AccentValues {
+    /// Uses the hue of the palette's accent, but never more colour than
+    /// the wallpaper has: the Material accent always has strong chroma, so
+    /// a grey or black wallpaper would otherwise get a loud accent in an
+    /// arbitrary hue.
     pub fn from_palette(palette: &Palette) -> Self {
-        Self::from_color(palette.light.accent)
+        let accent = Hct::new(palette.light.accent.into());
+        let source = Hct::new(palette.source.into());
+        Self::from_hue_chroma(
+            accent.get_hue(),
+            accent.get_chroma().min(source.get_chroma()),
+        )
     }
 
     /// Builds the shades from the hue and colourfulness of `color`. Its
@@ -84,7 +93,10 @@ impl AccentValues {
     /// accent colour stays readable whatever the wallpaper looks like.
     pub fn from_color(color: Color) -> Self {
         let base = Hct::new(color.into());
-        let (hue, chroma) = (base.get_hue(), base.get_chroma());
+        Self::from_hue_chroma(base.get_hue(), base.get_chroma())
+    }
+
+    fn from_hue_chroma(hue: f64, chroma: f64) -> Self {
         let shade = |hue: f64, tone: f64| Color::from(Rgb::from(Hct::from(hue, chroma, tone)));
 
         let shades = SHADE_TONES.map(|tone| shade(hue, tone));
@@ -320,11 +332,44 @@ mod tests {
     }
 
     #[test]
-    fn from_palette_uses_the_palette_accent() {
+    fn from_palette_uses_the_palette_accent_for_colourful_wallpapers() {
         let p = Palette::from_color(Color::new(40, 180, 60));
         assert_eq!(
             AccentValues::from_palette(&p),
             AccentValues::from_color(p.light.accent)
         );
+    }
+
+    /// Below this an accent reads as grey.
+    const NEUTRAL_CHROMA: f64 = 4.0;
+
+    fn chroma(c: Color) -> f64 {
+        Hct::new(c.into()).get_chroma()
+    }
+
+    #[test]
+    fn grey_and_black_wallpapers_get_a_neutral_accent() {
+        for source in [
+            Color::new(0, 0, 0),
+            Color::new(128, 128, 128),
+            Color::new(240, 240, 240),
+            Color::new(30, 32, 34),
+        ] {
+            let p = Palette::from_color(source);
+            assert!(chroma(p.light.accent) > 20.0, "Material adds colour");
+            let accent = AccentValues::from_palette(&p).accent();
+            // Pure greys still measure a little chroma in CAM16.
+            assert!(chroma(accent) < NEUTRAL_CHROMA, "{source} gave {accent}");
+        }
+    }
+
+    #[test]
+    fn muted_wallpapers_get_a_muted_accent_in_their_own_hue() {
+        // A desaturated teal, like an overcast sea photo.
+        let source = Color::new(96, 128, 128);
+        let p = Palette::from_color(source);
+        let accent = AccentValues::from_palette(&p).accent();
+        assert!(chroma(accent) <= chroma(source) + 1.0, "got {accent}");
+        assert!(accent.g > accent.r && accent.b > accent.r, "got {accent}");
     }
 }

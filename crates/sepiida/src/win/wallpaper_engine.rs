@@ -11,7 +11,7 @@ use std::{path::PathBuf, thread};
 use sepiida_core::{
     engine_config::read_selected_wallpaper,
     engine_tracker::Observed,
-    source::{SourceError, Wallpaper, WallpaperSource},
+    source::{Absence, Showing, SourceError, WallpaperSource},
     wallpaper_engine::project_wallpaper,
 };
 use windows::{
@@ -48,21 +48,21 @@ enum EngineError {
 pub struct WallpaperEngine;
 
 impl WallpaperSource for WallpaperEngine {
-    fn current(&self) -> Result<Option<Wallpaper>, SourceError> {
+    fn current(&self) -> Result<Showing, SourceError> {
         let Some((_, executable)) = running_executable()? else {
-            return Ok(None);
+            return Ok(Showing::Nothing(Absence::NotRunning));
         };
         let folder = executable
             .parent()
             .ok_or_else(|| EngineError::NoFolder(executable.clone()))?;
         let Some(reported) = read_selected_wallpaper(folder)? else {
-            return Ok(None);
+            return Ok(Showing::Nothing(Absence::NoneSelected));
         };
         let reported = PathBuf::from(reported);
         if !reported.is_absolute() {
             return Err(EngineError::RelativePath(reported.display().to_string()).into());
         }
-        Ok(Some(project_wallpaper(&reported)?))
+        Ok(Showing::Wallpaper(project_wallpaper(&reported)?))
     }
 }
 

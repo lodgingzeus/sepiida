@@ -4,7 +4,7 @@ use std::{ffi::c_void, path::PathBuf};
 
 use sepiida_core::{
     accent::from_colorref,
-    source::{SourceError, Wallpaper, WallpaperSource, windows_wallpaper},
+    source::{Showing, SourceError, Wallpaper, WallpaperSource, windows_wallpaper},
 };
 use windows::{
     Win32::{
@@ -36,8 +36,8 @@ enum DesktopError {
 pub struct WindowsWallpaper;
 
 impl WallpaperSource for WindowsWallpaper {
-    fn current(&self) -> Result<Option<Wallpaper>, SourceError> {
-        Ok(Some(read_wallpaper()?))
+    fn current(&self) -> Result<Showing, SourceError> {
+        Ok(Showing::Wallpaper(read_wallpaper()?))
     }
 }
 

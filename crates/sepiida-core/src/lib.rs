@@ -14,12 +14,20 @@ pub mod wallpaper_engine;
 use std::{fmt, path::Path, str::FromStr};
 
 use image::{DynamicImage, ImageReader, imageops::FilterType};
-use material_colors::{color::Rgb, image::extract_color, scheme::Scheme, theme::ThemeBuilder};
+use material_colors::{
+    color::Rgb,
+    quantize::{Quantizer, QuantizerCelebi},
+    scheme::Scheme,
+    score::Score,
+    theme::ThemeBuilder,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 /// Quantization time grows with pixel count and the result barely changes
 /// above this size, so every image is shrunk to fit this box first.
 const SAMPLE_SIZE: u32 = 128;
+/// Colours the quantizer reduces an image to before scoring.
+const MAX_QUANTIZED_COLORS: usize = 128;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -45,6 +53,16 @@ impl fmt::Display for Color {
 impl Color {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
+    }
+
+    /// Black or white, whichever reads better as text on this colour.
+    pub fn readable_text(self) -> Self {
+        // L* 50 is about where black and white text have equal contrast.
+        if lightness(self) > 50.0 {
+            Self::new(0, 0, 0)
+        } else {
+            Self::new(255, 255, 255)
+        }
     }
 }
 
@@ -138,7 +156,7 @@ impl Palette {
             .map(|p| Rgb::new(p[0], p[1], p[2]))
             .collect();
         let lightness = mean_lightness(pixels.iter().map(|&p| Color::from(p)));
-        Self::from_parts(extract_color(&pixels).into(), lightness)
+        Self::from_parts(source_color(&pixels), lightness)
     }
 
     /// The format is detected from the file contents, not the extension:
@@ -170,6 +188,27 @@ impl Palette {
             dark: (&theme.schemes.dark).into(),
         }
     }
+}
+
+/// The colour to build the palette from. Material scoring prefers colourful,
+/// widely used colours and skips near-greys; when nothing scores (a grey,
+/// black or very dark wallpaper) the most common colour is used instead of
+/// the library's fixed blue fallback, so the result still looks like the
+/// wallpaper.
+fn source_color(pixels: &[Rgb]) -> Color {
+    let quantized = QuantizerCelebi::quantize(pixels, MAX_QUANTIZED_COLORS).color_to_count;
+    let Some(dominant) = quantized
+        .iter()
+        .max_by_key(|&(_, &count)| count)
+        .map(|(&color, _)| color)
+    else {
+        return Color::new(0, 0, 0);
+    };
+    Score::score(&quantized, Some(1), Some(dominant), None)
+        .first()
+        .copied()
+        .unwrap_or(dominant)
+        .into()
 }
 
 /// CIE L* of an sRGB colour, 0 to 100.
@@ -263,6 +302,45 @@ mod tests {
             100
         );
         assert_eq!(mean_lightness(std::iter::empty()), 0);
+    }
+
+    #[test]
+    fn readable_text_contrasts_with_the_background() {
+        let black = Color::new(0, 0, 0);
+        let white = Color::new(255, 255, 255);
+        assert_eq!(white.readable_text(), black);
+        assert_eq!(Color::new(240, 240, 240).readable_text(), black);
+        assert_eq!(Color::new(242, 212, 173).readable_text(), black);
+        assert_eq!(Color::new(255, 230, 0).readable_text(), black);
+        assert_eq!(black.readable_text(), white);
+        assert_eq!(Color::new(32, 32, 32).readable_text(), white);
+        assert_eq!(Color::new(0, 0, 200).readable_text(), white);
+    }
+
+    #[test]
+    fn colourless_images_keep_their_own_colour_as_source() {
+        // Material scoring skips all of these and would pick its blue
+        // fallback (#4285f4).
+        for (r, g, b) in [(0, 0, 0), (128, 128, 128), (250, 250, 250), (20, 22, 24)] {
+            let source = Palette::from_image(&solid(r, g, b)).source;
+            let close = |want: u8, got: u8| want.abs_diff(got) <= 4;
+            assert!(
+                close(r, source.r) && close(g, source.g) && close(b, source.b),
+                "({r}, {g}, {b}) gave {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dark_photo_with_a_small_colourful_area_keeps_that_colour() {
+        let mut image = RgbImage::from_pixel(100, 100, Pixel([15, 15, 18]));
+        for x in 0..30 {
+            for y in 0..30 {
+                image.put_pixel(x, y, Pixel([200, 60, 40]));
+            }
+        }
+        let source = Palette::from_image(&DynamicImage::ImageRgb8(image)).source;
+        assert!(source.r > source.g && source.r > source.b, "got {source}");
     }
 
     #[test]
