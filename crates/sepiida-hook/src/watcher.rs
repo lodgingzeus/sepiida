@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use sepiida_core::{shell::finder::TaskbarFinder, shell::protocol::Command};
+use sepiida_core::shell::{finder::Finder, protocol::Command, rules::TASKBAR_RULES};
 use windows::{
     Win32::Foundation::{E_UNEXPECTED, S_OK},
     core::{HRESULT, PCWSTR, implement},
@@ -25,17 +25,18 @@ use crate::{
 
 struct UiState {
     generation: u64,
-    finder: TaskbarFinder,
+    finder: Finder,
     styler: Styler,
 }
 
 impl UiState {
     fn log_summary(&self) {
         log!(
-            "state: {} elements, taskbar seen: {}, {} taskbar background(s)",
+            "state: {} elements, anchor seen: {}, {} target(s), {} near miss(es)",
             self.finder.element_count(),
-            self.finder.saw_frame(),
-            self.finder.matched_count()
+            self.finder.saw_anchor(),
+            self.finder.matched_count(),
+            self.finder.near_miss_count()
         );
     }
 }
@@ -119,7 +120,7 @@ fn on_change(
             control::ensure_window();
             *slot = Some(UiState {
                 generation: watcher.generation,
-                finder: TaskbarFinder::new(),
+                finder: Finder::new(TASKBAR_RULES),
                 styler: Styler::new(watcher.diagnostics.clone(), watcher.service.clone()),
             });
         }
@@ -128,7 +129,12 @@ fn on_change(
         };
 
         if mutation_type == VisualMutationType::REMOVE {
-            let gone = state.finder.removed(element.Handle);
+            let gone: Vec<_> = state
+                .finder
+                .removed(element.Handle)
+                .into_iter()
+                .map(|m| m.handle)
+                .collect();
             state.styler.forget(&gone);
             return;
         }
@@ -141,14 +147,14 @@ fn on_change(
         let added = state
             .finder
             .added(element.Handle, relation.Parent, &type_name, &name);
-        if added.first_frame {
-            log!("found a taskbar ({type_name})");
+        if let Some(anchor) = added.first_anchor {
+            log!("found {anchor} ({type_name})");
         }
         if let Some(path) = added.near_miss {
-            log!("BackgroundFill not under a TaskbarFrame (yet): {path}");
+            log!("candidate not under its required ancestor (yet): {path}");
         }
-        for handle in added.matched {
-            state.styler.found(handle);
+        for found in added.matched {
+            state.styler.found(found.handle);
         }
     });
 }

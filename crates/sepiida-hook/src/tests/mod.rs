@@ -11,7 +11,7 @@ use std::{
 use sepiida_core::{
     Color,
     shell::protocol::{CONTROL_WINDOW_CLASS, Command, TAP_CLSID},
-    shell::tree::{RECTANGLE_TYPE, TASKBAR_BACKGROUND_NAME, TASKBAR_FRAME_NAME},
+    shell::rules::{RECTANGLE_TYPE, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME},
 };
 use windows::{
     Win32::{
@@ -30,6 +30,7 @@ mod fake;
 
 use fake::*;
 
+const TASKBAR_BACKGROUND_NAME: &str = TASKBAR_BACKGROUND.name;
 const BRUSH: &str = "Windows.UI.Xaml.Media.SolidColorBrush";
 
 /// Creates the TAP object the way XAML does: through the exported

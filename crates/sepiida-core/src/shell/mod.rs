@@ -3,4 +3,5 @@
 
 pub mod finder;
 pub mod protocol;
+pub mod rules;
 pub mod tree;

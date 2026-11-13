@@ -8,16 +8,10 @@
 
 use std::collections::HashMap;
 
+use super::rules::Rule;
+
 /// XAML Diagnostics' `InstanceHandle`. Zero means "no element".
 pub type Handle = u64;
-
-/// The type XAML Diagnostics reports for rectangles.
-pub const RECTANGLE_TYPE: &str = "Windows.UI.Xaml.Shapes.Rectangle";
-/// The rectangle that paints the taskbar background.
-pub const TASKBAR_BACKGROUND_NAME: &str = "BackgroundFill";
-/// The root of one taskbar's own tree. The hover flyout also contains a
-/// `BackgroundFill` rectangle, but not under this element.
-pub const TASKBAR_FRAME_NAME: &str = "TaskbarFrame";
 
 /// A shell process holds a few thousand elements. This cap only stops a
 /// broken or hostile stream of callbacks from growing memory inside the
@@ -138,26 +132,24 @@ impl ElementTree {
             .join(" < ")
     }
 
-    /// Whether this element is the rectangle that paints a taskbar's
-    /// background.
-    pub fn is_taskbar_background(&self, handle: Handle) -> bool {
+    /// Whether the element is one `rule` styles: right type and name, and
+    /// the required ancestor among its known ancestors.
+    pub fn matches(&self, handle: Handle, rule: &Rule) -> bool {
         let Some(element) = self.elements.get(&handle) else {
             return false;
         };
-        &*element.type_name == RECTANGLE_TYPE
-            && &*element.name == TASKBAR_BACKGROUND_NAME
-            && self
-                .ancestors(handle)
-                .any(|a| &*a.name == TASKBAR_FRAME_NAME)
+        rule.selects(&element.type_name, &element.name)
+            && rule
+                .ancestor
+                .is_none_or(|name| self.ancestors(handle).any(|a| &*a.name == name))
     }
 
-    /// Every taskbar background rectangle currently known, in no particular
-    /// order. One per taskbar (one per monitor that shows a taskbar).
-    pub fn taskbar_backgrounds(&self) -> Vec<Handle> {
+    /// Every element `rule` styles, in no particular order.
+    pub fn matching(&self, rule: &Rule) -> Vec<Handle> {
         self.elements
             .keys()
             .copied()
-            .filter(|&h| self.is_taskbar_background(h))
+            .filter(|&h| self.matches(h, rule))
             .collect()
     }
 }
@@ -165,6 +157,9 @@ impl ElementTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::rules::{RECTANGLE_TYPE, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME};
+
+    const TASKBAR_BACKGROUND_NAME: &str = TASKBAR_BACKGROUND.name;
 
     const GRID: &str = "Windows.UI.Xaml.Controls.Grid";
 
@@ -183,17 +178,17 @@ mod tests {
     #[test]
     fn finds_the_taskbar_background() {
         let tree = taskbar();
-        assert!(tree.is_taskbar_background(5));
-        assert_eq!(tree.taskbar_backgrounds(), vec![5]);
+        assert!(tree.matches(5, &TASKBAR_BACKGROUND));
+        assert_eq!(tree.matching(&TASKBAR_BACKGROUND), vec![5]);
     }
 
     #[test]
     fn other_elements_are_not_the_background() {
         let tree = taskbar();
         for handle in 1..=4 {
-            assert!(!tree.is_taskbar_background(handle));
+            assert!(!tree.matches(handle, &TASKBAR_BACKGROUND));
         }
-        assert!(!tree.is_taskbar_background(99));
+        assert!(!tree.matches(99, &TASKBAR_BACKGROUND));
     }
 
     #[test]
@@ -208,8 +203,8 @@ mod tests {
         );
         tree.add(11, 10, GRID, "");
         tree.add(12, 11, RECTANGLE_TYPE, TASKBAR_BACKGROUND_NAME);
-        assert!(!tree.is_taskbar_background(12));
-        assert!(tree.taskbar_backgrounds().is_empty());
+        assert!(!tree.matches(12, &TASKBAR_BACKGROUND));
+        assert!(tree.matching(&TASKBAR_BACKGROUND).is_empty());
     }
 
     #[test]
@@ -221,17 +216,17 @@ mod tests {
             "Windows.UI.Xaml.Controls.Border",
             TASKBAR_BACKGROUND_NAME,
         );
-        assert!(!tree.is_taskbar_background(6));
+        assert!(!tree.matches(6, &TASKBAR_BACKGROUND));
     }
 
     #[test]
     fn a_rectangle_added_before_its_ancestors_matches_once_they_arrive() {
         let mut tree = ElementTree::new();
         tree.add(5, 4, RECTANGLE_TYPE, TASKBAR_BACKGROUND_NAME);
-        assert!(tree.taskbar_backgrounds().is_empty());
+        assert!(tree.matching(&TASKBAR_BACKGROUND).is_empty());
         tree.add(4, 1, GRID, "");
         tree.add(1, 0, "Taskbar.TaskbarFrame", TASKBAR_FRAME_NAME);
-        assert_eq!(tree.taskbar_backgrounds(), vec![5]);
+        assert_eq!(tree.matching(&TASKBAR_BACKGROUND), vec![5]);
     }
 
     #[test]
@@ -239,7 +234,7 @@ mod tests {
         let mut tree = taskbar();
         tree.add(21, 0, "Taskbar.TaskbarFrame", TASKBAR_FRAME_NAME);
         tree.add(25, 21, RECTANGLE_TYPE, TASKBAR_BACKGROUND_NAME);
-        let mut found = tree.taskbar_backgrounds();
+        let mut found = tree.matching(&TASKBAR_BACKGROUND);
         found.sort_unstable();
         assert_eq!(found, vec![5, 25]);
     }
@@ -273,7 +268,7 @@ mod tests {
         assert_eq!(removed, vec![2, 3, 4, 5]);
         assert_eq!(tree.len(), 2);
         assert!(tree.get(1).is_some() && tree.get(30).is_some());
-        assert!(tree.taskbar_backgrounds().is_empty());
+        assert!(tree.matching(&TASKBAR_BACKGROUND).is_empty());
     }
 
     #[test]
@@ -296,7 +291,7 @@ mod tests {
         let mut tree = taskbar();
         tree.add(40, 0, GRID, "Elsewhere");
         tree.add(5, 40, RECTANGLE_TYPE, TASKBAR_BACKGROUND_NAME);
-        assert!(!tree.is_taskbar_background(5));
+        assert!(!tree.matches(5, &TASKBAR_BACKGROUND));
         assert_eq!(tree.len(), 6);
     }
 
@@ -306,7 +301,7 @@ mod tests {
         tree.add(1, 2, GRID, "");
         tree.add(2, 1, GRID, "");
         tree.add(3, 1, RECTANGLE_TYPE, TASKBAR_BACKGROUND_NAME);
-        assert!(!tree.is_taskbar_background(3));
+        assert!(!tree.matches(3, &TASKBAR_BACKGROUND));
         assert!(tree.ancestors(3).count() <= tree.len());
     }
 
