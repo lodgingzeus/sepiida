@@ -32,8 +32,15 @@ pub fn run(action: DumpAction) -> Result<()> {
 
 fn start() -> Result<()> {
     let dll = shell_hook::hook_dll_path()?;
+    // The folder too: opening the file goes through it.
+    if let Some(folder) = dll.parent() {
+        file_access::grant_app_packages_read(folder)?;
+    }
     file_access::grant_app_packages_read(&dll)?;
-    println!("{} is now readable by sandboxed apps", dll.display());
+    println!(
+        "{} and its folder are now readable by sandboxed apps",
+        dll.display()
+    );
 
     let hosts = processes::find_in_session(&SANDBOXED_HOSTS)?;
     if hosts.is_empty() {
@@ -42,10 +49,18 @@ fn start() -> Result<()> {
     }
     for host in &hosts {
         match shell_hook::attach_dump(host.pid, &dll) {
-            Ok((connection, hr)) => println!(
-                "{} (pid {}): VisualDiagConnection{connection} returned {:#010x}",
-                host.name, host.pid, hr.0
+            Ok(answered) if answered.is_empty() => println!(
+                "{} (pid {}): no XAML diagnostics port answered",
+                host.name, host.pid
             ),
+            Ok(answered) => {
+                for (connection, hr) in answered {
+                    println!(
+                        "{} (pid {}): VisualDiagConnection{connection} returned {:#010x}",
+                        host.name, host.pid, hr.0
+                    );
+                }
+            }
             Err(error) => println!("{} (pid {}): {error:#}", host.name, host.pid),
         }
     }

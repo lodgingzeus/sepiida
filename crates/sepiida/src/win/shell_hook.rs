@@ -24,7 +24,7 @@ use std::{
 use sepiida_core::shell::hosts::AttachMode;
 use sepiida_core::shell::protocol::{
     ATTACH_MESSAGE, CONTROL_WINDOW_CLASS, Command, HOOK_PROC_EXPORT, INITIALIZE_EXPORT,
-    control_window_title, failed_event_name, ready_event_name,
+    MAX_CONNECTION, control_window_title, failed_event_name, ready_event_name,
 };
 use windows::{
     Win32::{
@@ -268,14 +268,28 @@ fn check_arch(pid: u32) -> Result<(), ShellHookError> {
 }
 
 /// Asks XAML in process `pid` (any shell process, sandboxed or not) to load
-/// the DLL in dump mode, from sepiida.exe. Returns the connection that
-/// answered and its result. Nothing waits for the DLL: a sandboxed process
-/// cannot reach our events, and a suspended one (Start while closed) only
-/// acts once it runs again.
-pub fn attach_dump(pid: u32, dll: &Path) -> Result<(u32, HRESULT), ShellHookError> {
+/// the DLL in dump mode, from sepiida.exe, through every diagnostics
+/// connection that answers: a process can have one XAML core per window
+/// thread (ShellHost: one per flyout, it seems). Returns each connection
+/// that answered and its result; empty if none did. Nothing waits for the
+/// DLL: a sandboxed process cannot reach our events, and a suspended one
+/// only acts once it runs again.
+pub fn attach_dump(pid: u32, dll: &Path) -> Result<Vec<(u32, HRESULT)>, ShellHookError> {
     check_arch(pid)?;
     let library = Library::load(dll)?;
-    attach_remote(pid, &library, 1, AttachMode::Dump)
+    let mut answered = Vec::new();
+    let mut from = 1;
+    while from <= MAX_CONNECTION {
+        match attach_remote(pid, &library, from, AttachMode::Dump) {
+            Ok((connection, hr)) | Err(ShellHookError::Refused { connection, hr }) => {
+                answered.push((connection, hr));
+                from = connection + 1;
+            }
+            Err(ShellHookError::NoConnection) => break,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(answered)
 }
 
 fn attach_remote(

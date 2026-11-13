@@ -296,8 +296,9 @@ fn dump_mode_logs_the_tree_and_styles_nothing() {
             .iter()
             .any(|c| c.starts_with("CreateInstance"))
     );
+    // Stopping ends the dump and removes this thread's control window.
     send(Command::Detach);
-    wait_until("Unadvise", || shared.has("Unadvise"));
+    assert!(control_window().is_none());
 }
 
 #[test]

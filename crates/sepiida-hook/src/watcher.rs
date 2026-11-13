@@ -6,10 +6,7 @@
 use std::cell::RefCell;
 
 use sepiida_core::shell::{
-    finder::Finder,
-    hosts::{AttachMode, MAX_DUMPED_ELEMENTS},
-    protocol::Command,
-    rules::TASKBAR_RULES,
+    finder::Finder, hosts::AttachMode, protocol::Command, rules::TASKBAR_RULES,
 };
 use windows::{
     Win32::Foundation::{E_UNEXPECTED, S_OK},
@@ -17,7 +14,7 @@ use windows::{
 };
 
 use crate::{
-    control, guard,
+    control, dump, guard,
     log::log,
     session,
     styler::Styler,
@@ -30,28 +27,8 @@ use crate::{
 
 struct UiState {
     generation: u64,
-    mode: AttachMode,
     finder: Finder,
     styler: Styler,
-    /// Tree changes logged so far in dump mode.
-    dumped: usize,
-}
-
-impl UiState {
-    /// Dump mode: one log line per tree change, up to the cap. The lines
-    /// are `tree add <handle> < <parent> <Type>#<Name>`, enough to rebuild
-    /// the tree offline.
-    fn dump(&mut self, line: std::fmt::Arguments<'_>) {
-        if self.mode != AttachMode::Dump || self.dumped > MAX_DUMPED_ELEMENTS {
-            return;
-        }
-        self.dumped += 1;
-        if self.dumped > MAX_DUMPED_ELEMENTS {
-            log!("dump stopped after {MAX_DUMPED_ELEMENTS} tree changes");
-        } else {
-            log!("{line}");
-        }
-    }
 }
 
 impl UiState {
@@ -102,7 +79,9 @@ impl IVisualTreeServiceCallback_Impl for Watcher_Impl {
         mutation_type: VisualMutationType,
     ) -> HRESULT {
         guard("OnVisualTreeChange", E_UNEXPECTED, || {
-            if session::is_current(self.generation) {
+            if self.mode == AttachMode::Dump {
+                dump::on_change(self.generation, &relation, &element, mutation_type);
+            } else if session::is_current(self.generation) {
                 on_change(self, relation, &element, mutation_type);
             }
             // `element` drops here and frees its strings, which XAML handed
@@ -148,10 +127,8 @@ fn on_change(
             control::ensure_window();
             *slot = Some(UiState {
                 generation: watcher.generation,
-                mode: watcher.mode,
                 finder: Finder::new(TASKBAR_RULES),
                 styler: Styler::new(watcher.diagnostics.clone(), watcher.service.clone()),
-                dumped: 0,
             });
         }
         let Some(state) = slot.as_mut() else {
@@ -159,7 +136,6 @@ fn on_change(
         };
 
         if mutation_type == VisualMutationType::REMOVE {
-            state.dump(format_args!("tree remove {:#x}", element.Handle));
             let gone: Vec<_> = state
                 .finder
                 .removed(element.Handle)
@@ -175,13 +151,6 @@ fn on_change(
 
         let name = element.Name.to_string();
         let type_name = element.Type.to_string();
-        state.dump(format_args!(
-            "tree add {:#x} < {:#x} {type_name}#{name}",
-            element.Handle, relation.Parent
-        ));
-        if state.mode == AttachMode::Dump {
-            return;
-        }
         let added = state
             .finder
             .added(element.Handle, relation.Parent, &type_name, &name);
@@ -203,6 +172,9 @@ fn on_change(
 /// this thread.
 pub fn run_command(command: Command) {
     log!("command: {command:?}");
+    if command == Command::Detach {
+        dump::stop();
+    }
     let detached = STATE.with(|cell| {
         let Ok(mut slot) = cell.try_borrow_mut() else {
             log!("command arrived during a tree callback; ignored");

@@ -60,20 +60,26 @@ pub fn is_current(generation: u64) -> bool {
 pub fn attach(site: &IUnknown) -> Result<()> {
     let diagnostics: IXamlDiagnostics = site.cast()?;
     let service: IVisualTreeService3 = site.cast()?;
-    detach();
+    let mode = attach_mode(&diagnostics);
+    // Styling has one attachment; dump attachments (one per XAML core)
+    // run side by side and are stopped together (see `dump`).
+    if mode == AttachMode::Style {
+        detach();
+    }
 
     let generation = GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
-    let mode = attach_mode(&diagnostics);
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     log!("attaching (generation {generation}, {mode:?} mode) in {exe}");
     let watcher: IVisualTreeServiceCallback2 =
         Watcher::new(generation, mode, diagnostics, service.clone()).into();
-    *active() = Some(Active {
-        service: SendCom(service.clone()),
-        watcher: SendCom(watcher.clone()),
-    });
+    if mode == AttachMode::Style {
+        *active() = Some(Active {
+            service: SendCom(service.clone()),
+            watcher: SendCom(watcher.clone()),
+        });
+    }
 
     let (service, watcher) = (SendCom(service), SendCom(watcher));
     let spawned = thread::Builder::new()

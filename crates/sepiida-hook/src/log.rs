@@ -82,11 +82,13 @@ pub fn write(args: std::fmt::Arguments<'_>) {
     };
     // SAFETY: these calls take no arguments and cannot fail.
     let (t, pid, tid) = unsafe { (GetLocalTime(), GetCurrentProcessId(), GetCurrentThreadId()) };
-    let _ = writeln!(
-        file,
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} [{pid}:{tid}] {args}",
+    // One write per line: several shell processes append to the same file,
+    // and a line written in pieces gets interleaved with theirs.
+    let line = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} [{pid}:{tid}] {args}\n",
         t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds
     );
+    let _ = file.write_all(line.as_bytes());
 }
 
 /// `format!`-style logging to the hook log.
