@@ -62,6 +62,13 @@ fn shell_commands_parse() {
         parse(&["shell", "detach"]),
         Ok(Command::Shell(ShellCommand::Detach))
     );
+    for (args, action) in [
+        (&["shell", "dump"][..], DumpAction::Start),
+        (&["shell", "dump", "collect"], DumpAction::Collect),
+        (&["shell", "dump", "stop"], DumpAction::Stop),
+    ] {
+        assert_eq!(parse(args), Ok(Command::Shell(ShellCommand::Dump(action))));
+    }
 }
 
 #[test]
@@ -72,6 +79,8 @@ fn shell_rejects_bad_arguments() {
         &["shell", "attach", "now"],
         &["shell", "color"],
         &["shell", "color", "#1a2b3c", "extra"],
+        &["shell", "dump", "now"],
+        &["shell", "dump", "collect", "extra"],
     ] {
         assert_eq!(parse(args), Err(CliError::ShellArguments), "{args:?}");
     }

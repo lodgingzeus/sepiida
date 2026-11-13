@@ -16,10 +16,10 @@ use windows::{
         Foundation::CloseHandle,
         System::Threading::{EVENT_MODIFY_STATE, GetCurrentProcessId, OpenEventW, SetEvent},
     },
-    core::{HSTRING, IUnknown, Interface, Result},
+    core::{BSTR, HSTRING, IUnknown, Interface, Result},
 };
 
-use sepiida_core::shell::protocol;
+use sepiida_core::shell::{hosts::AttachMode, protocol};
 
 use crate::{
     log::log,
@@ -63,9 +63,13 @@ pub fn attach(site: &IUnknown) -> Result<()> {
     detach();
 
     let generation = GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
-    log!("attaching (generation {generation})");
+    let mode = attach_mode(&diagnostics);
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    log!("attaching (generation {generation}, {mode:?} mode) in {exe}");
     let watcher: IVisualTreeServiceCallback2 =
-        Watcher::new(generation, diagnostics, service.clone()).into();
+        Watcher::new(generation, mode, diagnostics, service.clone()).into();
     *active() = Some(Active {
         service: SendCom(service.clone()),
         watcher: SendCom(watcher.clone()),
@@ -93,6 +97,18 @@ pub fn attach(site: &IUnknown) -> Result<()> {
         log!("could not start the advise thread: {error}");
     }
     Ok(())
+}
+
+/// The mode sepiida.exe asked for, passed as the initialisation string.
+fn attach_mode(diagnostics: &IXamlDiagnostics) -> AttachMode {
+    let mut data = BSTR::new();
+    // SAFETY: `data` receives a string we own and free on drop.
+    let hr = unsafe { diagnostics.GetInitializationData(&mut data) };
+    if hr.is_err() {
+        log!("GetInitializationData failed: {hr}");
+        return AttachMode::default();
+    }
+    AttachMode::from_init_data(&data.to_string())
 }
 
 /// Stops the active attachment, if any. Brushes are put back by the UI

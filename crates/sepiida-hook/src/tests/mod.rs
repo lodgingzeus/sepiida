@@ -278,6 +278,29 @@ fn colours_wait_for_targets_and_explorer_replacements_are_restored() {
 }
 
 #[test]
+fn dump_mode_logs_the_tree_and_styles_nothing() {
+    let _serial = serial();
+    let (shared, site) = new_fake();
+    *shared.init_data.lock().unwrap() = Some("sepiida:dump".into());
+    let tap = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap.SetSite(&site) }.unwrap();
+    let callback = wait_for_callback(&shared);
+    add_taskbar(&callback);
+    send(Command::SetColor(Role::Surface, Color::new(1, 2, 3)));
+    // Not even the property chain is read: the taskbar is never a target.
+    assert!(!shared.has("GetPropertyValuesChain 0x5"));
+    assert!(
+        !shared
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("CreateInstance"))
+    );
+    send(Command::Detach);
+    wait_until("Unadvise", || shared.has("Unadvise"));
+}
+
+#[test]
 fn a_site_without_the_diagnostics_interfaces_is_refused() {
     let tap = new_tap();
     let not_xaml: IUnknown = Factory.into();

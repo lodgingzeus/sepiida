@@ -40,6 +40,9 @@ pub(super) struct Shared {
     /// Instances whose handle has gone stale, as diagnostics handles do once
     /// nothing holds the object.
     pub(super) stale: Mutex<HashSet<InstanceHandle>>,
+    /// What `GetInitializationData` returns; `None` fails like a site
+    /// that was given no data.
+    pub(super) init_data: Mutex<Option<String>>,
     pub(super) next_handle: AtomicU64,
 }
 
@@ -312,8 +315,15 @@ impl IXamlDiagnostics_Impl for FakeXaml_Impl {
     unsafe fn RegisterInstance(&self, _: *mut c_void, _: *mut InstanceHandle) -> HRESULT {
         E_NOTIMPL
     }
-    unsafe fn GetInitializationData(&self, _: *mut BSTR) -> HRESULT {
-        E_NOTIMPL
+    unsafe fn GetInitializationData(&self, data: *mut BSTR) -> HRESULT {
+        match self.0.init_data.lock().unwrap().as_deref() {
+            // SAFETY: the DLL passes a writable pointer and frees the string.
+            Some(text) => unsafe {
+                data.write(BSTR::from(text));
+                S_OK
+            },
+            None => E_NOTIMPL,
+        }
     }
 }
 

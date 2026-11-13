@@ -4,6 +4,10 @@
 //!
 //! Logging never fails loudly: if the file cannot be opened the message is
 //! dropped. Nothing here may panic.
+//!
+//! In a sandboxed (AppContainer) process such as the Start menu the
+//! sepiida log folder is not writable, so the log goes to that process's
+//! own temp folder instead (`sepiida shell dump collect` gathers it).
 
 use std::{
     fs::{self, File, OpenOptions},
@@ -12,9 +16,13 @@ use std::{
     sync::Mutex,
 };
 
-use windows::Win32::System::{
-    SystemInformation::GetLocalTime,
-    Threading::{GetCurrentProcessId, GetCurrentThreadId},
+use sepiida_core::shell::hosts::FALLBACK_LOG_FILE;
+use windows::Win32::{
+    Storage::FileSystem::GetTempPathW,
+    System::{
+        SystemInformation::GetLocalTime,
+        Threading::{GetCurrentProcessId, GetCurrentThreadId},
+    },
 };
 
 const LOG_FILE: &str = "hook.log";
@@ -31,15 +39,35 @@ fn log_dir() -> Option<PathBuf> {
         .then(|| base.join("sepiida").join("logs"))
 }
 
-fn open() -> Option<File> {
-    let dir = log_dir()?;
-    fs::create_dir_all(&dir).ok()?;
-    let path = dir.join(LOG_FILE);
+/// This process's temp folder; in an AppContainer, the package's own.
+fn temp_dir() -> Option<PathBuf> {
+    let mut buffer = [0u16; 512];
+    // SAFETY: the buffer is writable for its whole length.
+    let len = unsafe { GetTempPathW(Some(&mut buffer)) } as usize;
+    if len == 0 || len >= buffer.len() {
+        return None;
+    }
+    let dir = PathBuf::from(String::from_utf16_lossy(&buffer[..len]));
+    dir.is_absolute().then_some(dir)
+}
+
+fn open_in(dir: &std::path::Path, file: &str, old_file: &str) -> Option<File> {
+    fs::create_dir_all(dir).ok()?;
+    let path = dir.join(file);
     if fs::metadata(&path).is_ok_and(|m| m.len() > MAX_LOG_BYTES) {
         // Best effort; if it fails we keep appending to the big file.
-        let _ = fs::rename(&path, dir.join(OLD_LOG_FILE));
+        let _ = fs::rename(&path, dir.join(old_file));
     }
     OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+fn open() -> Option<File> {
+    log_dir()
+        .and_then(|dir| open_in(&dir, LOG_FILE, OLD_LOG_FILE))
+        .or_else(|| {
+            let dir = temp_dir()?;
+            open_in(&dir, FALLBACK_LOG_FILE, "sepiida-hook.old.log")
+        })
 }
 
 pub fn write(args: std::fmt::Arguments<'_>) {

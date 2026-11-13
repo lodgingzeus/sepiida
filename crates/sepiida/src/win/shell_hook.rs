@@ -21,6 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use sepiida_core::shell::hosts::AttachMode;
 use sepiida_core::shell::protocol::{
     ATTACH_MESSAGE, CONTROL_WINDOW_CLASS, Command, HOOK_PROC_EXPORT, INITIALIZE_EXPORT,
     control_window_title, failed_event_name, ready_event_name,
@@ -81,7 +82,7 @@ pub enum ShellHookError {
         explorer.artifact_suffix(), ours.artifact_suffix(), explorer.artifact_suffix()
     )]
     WrongArch { explorer: Arch, ours: Arch },
-    #[error("no XAML diagnostics port answered in Explorer")]
+    #[error("no XAML diagnostics port answered in that process (is its XAML up yet?)")]
     NoConnection,
     #[error("XAML Diagnostics refused through VisualDiagConnection{connection}: {hr}")]
     Refused { connection: u32, hr: HRESULT },
@@ -120,7 +121,7 @@ pub struct Attached {
 
 pub type ModuleCheck = Result<Option<PathBuf>, windows::core::Error>;
 
-type InitializeExport = unsafe extern "system" fn(u32, u32, *mut u32) -> HRESULT;
+type InitializeExport = unsafe extern "system" fn(u32, u32, u32, *mut u32) -> HRESULT;
 
 /// The taskbar window, and the process and thread that own it.
 pub struct Taskbar {
@@ -167,12 +168,7 @@ pub fn attach(
     from: u32,
     method: Method,
 ) -> Result<Attached, ShellHookError> {
-    let ours = Arch::this_build();
-    if let Some(explorer) = process_info::process_arch(taskbar.pid)
-        && explorer != ours
-    {
-        return Err(ShellHookError::WrongArch { explorer, ours });
-    }
+    check_arch(taskbar.pid)?;
     let replaced = detach_all(taskbar.pid)?;
     if replaced > 0 {
         wait_for_detach(taskbar.pid);
@@ -189,7 +185,7 @@ pub fn attach(
             (None, hooked.outcome)
         }
         Method::Remote => {
-            let result = attach_remote(taskbar.pid, &library, from)?;
+            let result = attach_remote(taskbar.pid, &library, from, AttachMode::Style)?;
             (Some(result), signals.wait(READY_TIMEOUT))
         }
     };
@@ -261,7 +257,33 @@ fn attach_in_process(
     })
 }
 
-fn attach_remote(pid: u32, library: &Library, from: u32) -> Result<(u32, HRESULT), ShellHookError> {
+/// Refuses a target whose architecture differs from this build's: the DLL
+/// could never load there.
+fn check_arch(pid: u32) -> Result<(), ShellHookError> {
+    let ours = Arch::this_build();
+    match process_info::process_arch(pid) {
+        Some(explorer) if explorer != ours => Err(ShellHookError::WrongArch { explorer, ours }),
+        _ => Ok(()),
+    }
+}
+
+/// Asks XAML in process `pid` (any shell process, sandboxed or not) to load
+/// the DLL in dump mode, from sepiida.exe. Returns the connection that
+/// answered and its result. Nothing waits for the DLL: a sandboxed process
+/// cannot reach our events, and a suspended one (Start while closed) only
+/// acts once it runs again.
+pub fn attach_dump(pid: u32, dll: &Path) -> Result<(u32, HRESULT), ShellHookError> {
+    check_arch(pid)?;
+    let library = Library::load(dll)?;
+    attach_remote(pid, &library, 1, AttachMode::Dump)
+}
+
+fn attach_remote(
+    pid: u32,
+    library: &Library,
+    from: u32,
+    mode: AttachMode,
+) -> Result<(u32, HRESULT), ShellHookError> {
     let proc = library.export(INITIALIZE_EXPORT)?;
     // SAFETY: the export's documented signature (see the DLL's
     // `SepiidaInitializeXamlDiagnostics`).
@@ -270,7 +292,7 @@ fn attach_remote(pid: u32, library: &Library, from: u32) -> Result<(u32, HRESULT
     };
     let mut connection = 0;
     // SAFETY: `connection` is writable.
-    let hr = unsafe { initialize(pid, from, &mut connection) };
+    let hr = unsafe { initialize(pid, from, mode.id(), &mut connection) };
     if hr == ERROR_NOT_FOUND.to_hresult() {
         return Err(ShellHookError::NoConnection);
     }

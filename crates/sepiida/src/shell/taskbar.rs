@@ -31,6 +31,8 @@ pub fn run_cli(command: ShellCommand) -> Result<()> {
         ShellCommand::Color(color) => send(taskbar.pid, Command::SetColor(Role::Surface, color))?,
         ShellCommand::Restore => send(taskbar.pid, Command::Restore)?,
         ShellCommand::Detach => send(taskbar.pid, Command::Detach)?,
+        // Handled by `shell::dump`.
+        ShellCommand::Dump(_) => {}
     }
     Ok(())
 }

@@ -35,7 +35,12 @@ taskbar\" is on in the settings):
   color <rrggbb>     paint the taskbar background in this colour (`#` optional;
                      PowerShell needs quotes around a leading `#`)
   restore            put the original taskbar background back
-  detach             restore and stop watching (the DLL stays loaded until Explorer restarts)";
+  detach             restore and stop watching (the DLL stays loaded until Explorer restarts)
+  dump               log the element tree of Start and the notification centre
+                     (attaches to StartMenuExperienceHost, ShellExperienceHost
+                     and ShellHost; open each surface afterwards)
+  dump collect       copy those logs into %LOCALAPPDATA%\\sepiida\\logs
+  dump stop          stop dumping";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -60,6 +65,19 @@ pub enum ShellCommand {
     Color(Color),
     Restore,
     Detach,
+    Dump(DumpAction),
+}
+
+/// `sepiida shell dump …`: logs the XAML tree of Start and the
+/// notification centre, to find what to style there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DumpAction {
+    /// Attach in dump mode to every sandboxed shell host.
+    Start,
+    /// Copy the dump logs from the hosts' temp folders to sepiida's logs.
+    Collect,
+    /// Detach the dumping copies.
+    Stop,
 }
 
 /// What was given on the command line. `None` means "use the setting".
@@ -117,7 +135,10 @@ pub enum CliError {
     Repeated(&'static str),
     #[error("{0}")]
     InvalidValue(String),
-    #[error("`shell` takes one of: attach [--from N] [--remote], color <rrggbb>, restore, detach")]
+    #[error(
+        "`shell` takes one of: attach [--from N] [--remote], color <rrggbb>, restore, detach, \
+         dump [collect|stop]"
+    )]
     ShellArguments,
 }
 
@@ -194,6 +215,9 @@ fn parse_shell(args: &[&str]) -> Result<ShellCommand, CliError> {
         }
         ["restore"] => Ok(ShellCommand::Restore),
         ["detach"] => Ok(ShellCommand::Detach),
+        ["dump"] => Ok(ShellCommand::Dump(DumpAction::Start)),
+        ["dump", "collect"] => Ok(ShellCommand::Dump(DumpAction::Collect)),
+        ["dump", "stop"] => Ok(ShellCommand::Dump(DumpAction::Stop)),
         _ => Err(CliError::ShellArguments),
     }
 }

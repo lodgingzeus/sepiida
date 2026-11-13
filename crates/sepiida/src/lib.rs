@@ -122,7 +122,10 @@ fn shell(_command: ShellCommand) -> Result<()> {
 
 #[cfg(windows)]
 fn shell(command: ShellCommand) -> Result<()> {
-    shell::run_cli(command)
+    match command {
+        ShellCommand::Dump(action) => shell::dump::run(action),
+        other => shell::taskbar::run_cli(other),
+    }
 }
 
 /// The settings window on its own, without the tray. Changes reach a

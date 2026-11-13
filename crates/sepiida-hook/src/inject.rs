@@ -23,10 +23,15 @@ use std::{
     thread,
 };
 
-use sepiida_core::shell::protocol::{ATTACH_MESSAGE, MAX_CONNECTION, TAP_CLSID, connection_names};
+use sepiida_core::shell::{
+    hosts::AttachMode,
+    protocol::{ATTACH_MESSAGE, MAX_CONNECTION, TAP_CLSID, connection_names},
+};
 use windows::{
     Win32::{
-        Foundation::{E_POINTER, E_UNEXPECTED, ERROR_NOT_FOUND, LPARAM, LRESULT, WPARAM},
+        Foundation::{
+            E_INVALIDARG, E_POINTER, E_UNEXPECTED, ERROR_NOT_FOUND, LPARAM, LRESULT, WPARAM,
+        },
         System::{
             LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
             Threading::GetCurrentProcessId,
@@ -47,9 +52,10 @@ static ATTACHING: AtomicBool = AtomicBool::new(false);
 /// shows whether Windows loaded the DLL into Explorer at all.
 static HOOK_SEEN: AtomicBool = AtomicBool::new(false);
 
-/// Asks XAML in process `pid` to load this DLL, trying connections from
-/// `from` on. Returns the connection number that answered and its result.
-pub fn initialize(pid: u32, from: u32) -> Result<(u32, HRESULT), HRESULT> {
+/// Asks XAML in process `pid` to load this DLL in `mode`, trying
+/// connections from `from` on. Returns the connection number that answered
+/// and its result.
+pub fn initialize(pid: u32, from: u32, mode: AttachMode) -> Result<(u32, HRESULT), HRESULT> {
     let Some(path) = module::this_path() else {
         return Err(E_UNEXPECTED);
     };
@@ -58,7 +64,7 @@ pub fn initialize(pid: u32, from: u32) -> Result<(u32, HRESULT), HRESULT> {
     let mut tried = 0;
     for (number, name) in connection_names(from) {
         tried += 1;
-        let hr = call_on_fresh_thread(initialize, &name, pid, &path);
+        let hr = call_on_fresh_thread(initialize, &name, pid, &path, mode);
         if hr == not_found {
             continue;
         }
@@ -103,16 +109,18 @@ fn call_on_fresh_thread(
     connection: &str,
     pid: u32,
     dll: &Path,
+    mode: AttachMode,
 ) -> HRESULT {
     let connection = HSTRING::from(connection);
     let dll = HSTRING::from(dll.as_os_str());
+    let data = mode.init_data().map(HSTRING::from);
     let clsid = GUID::from_u128(TAP_CLSID);
     thread::scope(|scope| {
         scope
             .spawn(|| {
                 // SAFETY: the strings outlive the call; a null path selects
                 // the system's XamlDiagnostics.dll, a null initialisation
-                // string passes no data.
+                // string passes no data (style mode).
                 unsafe {
                     initialize(
                         PCWSTR(connection.as_ptr()),
@@ -120,7 +128,7 @@ fn call_on_fresh_thread(
                         PCWSTR::null(),
                         PCWSTR(dll.as_ptr()),
                         clsid,
-                        PCWSTR::null(),
+                        data.as_ref().map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
                     )
                 }
             })
@@ -130,7 +138,7 @@ fn call_on_fresh_thread(
 }
 
 /// Cross-process attach, called by sepiida.exe after loading this DLL into
-/// itself.
+/// itself. `mode` is an `AttachMode` id.
 ///
 /// # Safety
 /// `connection` must be null or writable.
@@ -138,13 +146,17 @@ fn call_on_fresh_thread(
 pub unsafe extern "system" fn SepiidaInitializeXamlDiagnostics(
     pid: u32,
     from: u32,
+    mode: u32,
     connection: *mut u32,
 ) -> HRESULT {
     guard("SepiidaInitializeXamlDiagnostics", E_UNEXPECTED, || {
         if connection.is_null() {
             return E_POINTER;
         }
-        match initialize(pid, from) {
+        let Some(mode) = AttachMode::from_id(mode) else {
+            return E_INVALIDARG;
+        };
+        match initialize(pid, from, mode) {
             Ok((number, hr)) => {
                 // SAFETY: checked non-null above.
                 unsafe { *connection = number };
@@ -213,7 +225,7 @@ fn start_in_process(from: u32) {
             guard("in-process attach thread", (), || {
                 // SAFETY: takes no arguments.
                 let pid = unsafe { GetCurrentProcessId() };
-                if let Err(hr) = initialize(pid, from) {
+                if let Err(hr) = initialize(pid, from, AttachMode::Style) {
                     log!("in-process attach failed: {hr}");
                     session::signal_failed();
                 }
