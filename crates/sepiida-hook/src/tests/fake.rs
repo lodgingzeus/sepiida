@@ -279,7 +279,9 @@ impl IXamlDiagnostics_Impl for FakeXaml_Impl {
         handle: InstanceHandle,
         object: *mut *mut c_void,
     ) -> HRESULT {
-        if handle != ORIGINAL_FILL {
+        // Explorer's own brushes; anything else stands for an object the
+        // fake does not model.
+        if handle != ORIGINAL_FILL && handle != LIVE_FILL {
             return E_NOTIMPL;
         }
         // Any COM object stands in for the original brush.

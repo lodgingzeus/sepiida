@@ -4,6 +4,7 @@
 //! real COM objects and a real message-only window); runs in CI.
 
 use std::{
+    sync::{Mutex, MutexGuard},
     thread,
     time::{Duration, Instant},
 };
@@ -127,8 +128,20 @@ fn send(command: Command) {
     unsafe { SendMessageW(window, message, Some(WPARAM(wparam)), Some(LPARAM(0))) };
 }
 
+/// A brush Explorer sets by itself after we styled the taskbar.
+const EXPLORER_FILL: u64 = 0x300;
+
+/// The attach tests share the DLL's one global attachment, so they run one
+/// at a time.
+static ATTACH_LOCK: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    ATTACH_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[test]
 fn attach_style_restore_reattach_detach() {
+    let _serial = serial();
     // Attach.
     let (first, site) = new_fake();
     let tap = new_tap();
@@ -191,6 +204,68 @@ fn attach_style_restore_reattach_detach() {
     wait_until("Unadvise of the second attachment", || {
         second.has("Unadvise")
     });
+    assert!(control_window().is_none());
+}
+
+#[test]
+fn colours_wait_for_targets_and_explorer_replacements_are_restored() {
+    let _serial = serial();
+    let (shared, site) = new_fake();
+    let tap = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap.SetSite(&site) }.unwrap();
+    let callback = wait_for_callback(&shared);
+    // No target yet: colours are kept, no brush is created.
+    add(&callback, 1, 0, "Taskbar.TaskbarFrame", TASKBAR_FRAME_NAME);
+    send(Command::SetColor(
+        Role::Surface,
+        Color::new(0x10, 0x20, 0x30),
+    ));
+    send(Command::SetColor(
+        Role::Accent,
+        Color::new(0x40, 0x50, 0x60),
+    ));
+    let created = |shared: &fake::Shared| {
+        shared
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("CreateInstance"))
+            .count()
+    };
+    assert_eq!(created(&shared), 0);
+
+    // The taskbar arrives and gets the kept colour; the accent, which no
+    // rule uses, gets no brush.
+    add(
+        &callback,
+        RECT_HANDLE,
+        1,
+        RECTANGLE_TYPE,
+        TASKBAR_BACKGROUND_NAME,
+    );
+    assert!(shared.has(&format!("CreateInstance {BRUSH} null -> 0x1000")));
+    assert!(shared.has("CreateInstance Windows.UI.Color #FF102030 -> 0x1001"));
+    assert!(shared.has(&format!("SetProperty 0x5 {FILL_INDEX} 0x1000")));
+    assert_eq!(created(&shared), 2);
+
+    // Explorer puts its own brush back (a theme change). The next colour
+    // paints over it, and restore brings back that brush, not the first.
+    shared
+        .values
+        .lock()
+        .unwrap()
+        .insert((RECT_HANDLE, FILL_INDEX), EXPLORER_FILL);
+    send(Command::SetColor(Role::Surface, Color::new(1, 1, 1)));
+    assert_eq!(
+        shared.count(&format!("SetProperty 0x5 {FILL_INDEX} 0x1000")),
+        2
+    );
+    send(Command::Restore);
+    assert!(shared.has(&format!("SetProperty 0x5 {FILL_INDEX} {EXPLORER_FILL:#x}")));
+    assert!(!shared.has(&format!("SetProperty 0x5 {FILL_INDEX} {LIVE_FILL:#x}")));
+
+    send(Command::Detach);
+    wait_until("Unadvise", || shared.has("Unadvise"));
     assert!(control_window().is_none());
 }
 

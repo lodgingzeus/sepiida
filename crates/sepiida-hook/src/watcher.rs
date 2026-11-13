@@ -154,7 +154,9 @@ fn on_change(
             log!("candidate not under its required ancestor (yet): {path}");
         }
         for found in added.matched {
-            state.styler.found(found.handle);
+            if let Some(rule) = state.finder.rule(found.rule) {
+                state.styler.found(found, rule);
+            }
         }
     });
 }
