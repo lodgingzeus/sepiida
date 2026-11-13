@@ -1,5 +1,5 @@
-//! `sepiida shell …`: the experimental taskbar styling from the command
-//! line (M3 spike).
+//! `sepiida shell attach | color | restore | detach`: the taskbar styling
+//! from the command line (M3 spike).
 
 use anyhow::Result;
 use sepiida_core::shell::{protocol::Command, rules::Role};
