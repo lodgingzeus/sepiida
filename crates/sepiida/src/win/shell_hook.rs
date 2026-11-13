@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use sepiida_core::hook_protocol::{
+use sepiida_core::shell::protocol::{
     CONTROL_WINDOW_CLASS, Command, TAP_CLSID, connection_names, ready_event_name,
 };
 use windows::{

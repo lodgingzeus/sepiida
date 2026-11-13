@@ -21,10 +21,10 @@ use tracing::warn;
 
 use crate::{
     SettingsWindow,
-    paths::Paths,
-    settings_model::{
+    gui::settings_model::{
         is_our_startup_entry, mode_at, mode_index, source_at, source_index, startup_command,
     },
+    paths::Paths,
     win::{desktop::WindowsWallpaper, startup, wallpaper_engine::WallpaperEngine},
 };
 

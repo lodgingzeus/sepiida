@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use sepiida_core::{Color, hook_protocol::xaml_color, xaml_tree::Handle};
+use sepiida_core::{Color, shell::protocol::xaml_color, shell::tree::Handle};
 use windows::{
     Win32::System::Com::CoTaskMemFree,
     core::{BSTR, HRESULT, IUnknown, Interface, PCWSTR, w},

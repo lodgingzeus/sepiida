@@ -23,7 +23,7 @@ use std::{
 
 use serde_json::{Map, Value};
 
-use crate::engine_tracker::CONFIG_FILE;
+use super::tracker::CONFIG_FILE;
 
 /// Real files are a few kilobytes; playlists add a little.
 const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;

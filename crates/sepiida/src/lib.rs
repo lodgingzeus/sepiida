@@ -1,13 +1,13 @@
 //! sepiida: wallpaper → palette → Windows accent colour. Shared by the
 //! console program (`sepiida.exe`) and the windowless one (`sepiidaw.exe`).
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 mod agent;
 #[cfg(windows)]
 mod apply;
 mod cli;
-#[cfg(windows)]
-mod engine_watch;
+#[cfg(any(windows, test))]
+mod gui;
 #[cfg(any(windows, test))]
 mod logging;
 #[cfg(any(windows, test))]
@@ -15,17 +15,7 @@ mod paths;
 #[cfg(windows)]
 mod restore;
 #[cfg(windows)]
-mod settings;
-#[cfg(any(windows, test))]
-mod settings_model;
-#[cfg(windows)]
 mod shell;
-#[cfg(windows)]
-mod tray;
-#[cfg(any(windows, test))]
-mod tray_icon;
-#[cfg(any(windows, test))]
-mod watch;
 #[cfg(windows)]
 mod win;
 
@@ -140,7 +130,7 @@ fn shell(command: ShellCommand) -> Result<()> {
 #[cfg(windows)]
 fn run_settings() -> Result<()> {
     let paths = paths::Paths::locate()?;
-    let _window = settings::open(&paths)?;
+    let _window = gui::settings::open(&paths)?;
     slint::run_event_loop()?;
     Ok(())
 }

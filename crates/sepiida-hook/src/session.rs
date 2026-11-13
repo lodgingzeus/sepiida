@@ -21,7 +21,7 @@ use windows::{
 
 use crate::{
     log::log,
-    ui::Watcher,
+    watcher::Watcher,
     xamlom::{IVisualTreeService3, IVisualTreeServiceCallback2, IXamlDiagnostics},
 };
 
@@ -125,7 +125,7 @@ pub fn detach() {
 fn signal_ready() {
     // SAFETY: plain Win32 calls with a valid name; the handle is closed.
     unsafe {
-        let name = HSTRING::from(sepiida_core::hook_protocol::ready_event_name(
+        let name = HSTRING::from(sepiida_core::shell::protocol::ready_event_name(
             GetCurrentProcessId(),
         ));
         match OpenEventW(EVENT_MODIFY_STATE, false, &name) {

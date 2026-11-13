@@ -2,7 +2,7 @@
 //! line (M3 spike).
 
 use anyhow::Result;
-use sepiida_core::hook_protocol::Command;
+use sepiida_core::shell::protocol::Command;
 
 use crate::{cli::ShellCommand, win::shell_hook};
 

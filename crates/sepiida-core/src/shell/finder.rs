@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use crate::xaml_tree::{
+use super::tree::{
     ElementTree, Handle, RECTANGLE_TYPE, TASKBAR_BACKGROUND_NAME, TASKBAR_FRAME_NAME,
 };
 

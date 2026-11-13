@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use sepiida_core::{hook_protocol::Command, taskbar_finder::TaskbarFinder};
+use sepiida_core::{shell::finder::TaskbarFinder, shell::protocol::Command};
 use windows::{
     Win32::Foundation::{E_UNEXPECTED, S_OK},
     core::{HRESULT, PCWSTR, implement},

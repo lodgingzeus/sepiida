@@ -24,12 +24,15 @@ use tracing::{error, info, warn};
 use crate::{
     apply::{self, Origin},
     cli::ApplyOptions,
-    engine_watch::EngineWatch,
+    gui::tray,
     logging,
     paths::Paths,
-    tray,
-    watch::{FileWatcher, MissingFolder},
     win::{desktop, desktop_events, single_instance},
+};
+
+use super::{
+    engine_watch::EngineWatch,
+    watch::{FileWatcher, MissingFolder},
 };
 
 /// Quiet time after the last notification before applying.

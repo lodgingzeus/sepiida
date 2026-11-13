@@ -1,0 +1,250 @@
+//! The palette engine: wallpaper image (or solid colour) in, Material You
+//! palette out.
+
+use std::path::Path;
+
+use image::{DynamicImage, ImageReader, imageops::FilterType};
+use material_colors::{
+    color::Rgb,
+    quantize::{Quantizer, QuantizerCelebi},
+    scheme::Scheme,
+    score::Score,
+    theme::ThemeBuilder,
+};
+
+use crate::{Color, color::lightness, source};
+
+/// Quantization time grows with pixel count and the result barely changes
+/// above this size, so every image is shrunk to fit this box first.
+const SAMPLE_SIZE: u32 = 128;
+/// Colours the quantizer reduces an image to before scoring.
+const MAX_QUANTIZED_COLORS: usize = 128;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("failed to open image")]
+    Io(#[from] std::io::Error),
+    #[error("failed to decode image")]
+    Image(#[from] image::ImageError),
+}
+
+/// The colours applied to the shell for one mode (light or dark).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tones {
+    pub accent: Color,
+    pub on_accent: Color,
+    pub surface: Color,
+    pub on_surface: Color,
+}
+
+impl From<&Scheme> for Tones {
+    fn from(s: &Scheme) -> Self {
+        Self {
+            accent: s.primary.into(),
+            on_accent: s.on_primary.into(),
+            surface: s.surface.into(),
+            on_surface: s.on_surface.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Palette {
+    /// The dominant colour picked from the wallpaper.
+    pub source: Color,
+    /// How light the wallpaper looks overall: mean CIE L*, 0 (black) to
+    /// 100 (white). For a solid colour, that colour's L*.
+    pub lightness: u8,
+    pub light: Tones,
+    pub dark: Tones,
+}
+
+impl Palette {
+    pub fn from_image(image: &DynamicImage) -> Self {
+        let pixels: Vec<Rgb> = image
+            .resize(SAMPLE_SIZE, SAMPLE_SIZE, FilterType::Triangle)
+            .into_rgb8()
+            .pixels()
+            .map(|p| Rgb::new(p[0], p[1], p[2]))
+            .collect();
+        let lightness = mean_lightness(pixels.iter().map(|&p| Color::from(p)));
+        Self::from_parts(source_color(&pixels), lightness)
+    }
+
+    /// The format is detected from the file contents, not the extension:
+    /// the copy of the wallpaper that Windows keeps has no extension.
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let reader = ImageReader::open(path)?.with_guessed_format()?;
+        Ok(Self::from_image(&reader.decode()?))
+    }
+
+    /// For a solid-colour background, where there is no image to analyse.
+    pub fn from_color(color: Color) -> Self {
+        Self::from_parts(color, lightness(color).round() as u8)
+    }
+
+    pub fn from_wallpaper(wallpaper: &source::Wallpaper) -> Result<Self, Error> {
+        match wallpaper {
+            source::Wallpaper::Image(path) => Self::from_path(path),
+            source::Wallpaper::Color(color) => Ok(Self::from_color(*color)),
+        }
+    }
+
+    /// Rebuilds a palette from what the cache stores.
+    pub fn from_parts(source: Color, lightness: u8) -> Self {
+        let theme = ThemeBuilder::with_source(source.into()).build();
+        Self {
+            source,
+            lightness: lightness.min(100),
+            light: (&theme.schemes.light).into(),
+            dark: (&theme.schemes.dark).into(),
+        }
+    }
+}
+
+/// The colour to build the palette from. Material scoring prefers colourful,
+/// widely used colours and skips near-greys; when nothing scores (a grey,
+/// black or very dark wallpaper) the most common colour is used instead of
+/// the library's fixed blue fallback, so the result still looks like the
+/// wallpaper.
+fn source_color(pixels: &[Rgb]) -> Color {
+    let quantized = QuantizerCelebi::quantize(pixels, MAX_QUANTIZED_COLORS).color_to_count;
+    let Some(dominant) = quantized
+        .iter()
+        .max_by_key(|&(_, &count)| count)
+        .map(|(&color, _)| color)
+    else {
+        return Color::new(0, 0, 0);
+    };
+    Score::score(&quantized, Some(1), Some(dominant), None)
+        .first()
+        .copied()
+        .unwrap_or(dominant)
+        .into()
+}
+
+fn mean_lightness(pixels: impl Iterator<Item = Color>) -> u8 {
+    let (sum, count) = pixels.fold((0.0f32, 0u32), |(sum, n), c| (sum + lightness(c), n + 1));
+    if count == 0 {
+        return 0;
+    }
+    // L* is within 0..=100, so the mean is too and the cast cannot wrap.
+    (sum / count as f32).round().clamp(0.0, 100.0) as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use image::{Rgb as Pixel, RgbImage};
+
+    use super::*;
+
+    fn solid(r: u8, g: u8, b: u8) -> DynamicImage {
+        DynamicImage::ImageRgb8(RgbImage::from_pixel(256, 144, Pixel([r, g, b])))
+    }
+
+    #[test]
+    fn palette_from_the_source_colour_matches_the_image_palette() {
+        // The palette cache stores only the source colour and rebuilds the
+        // rest from it, which is only correct if this holds.
+        let from_image = Palette::from_image(&solid(200, 111, 201));
+        assert_eq!(
+            Palette::from_parts(from_image.source, from_image.lightness),
+            from_image
+        );
+    }
+
+    #[test]
+    fn lightness_runs_from_black_to_white() {
+        assert_eq!(Palette::from_image(&solid(0, 0, 0)).lightness, 0);
+        assert_eq!(Palette::from_image(&solid(255, 255, 255)).lightness, 100);
+        let grey = Palette::from_image(&solid(119, 119, 119)).lightness;
+        assert!((49..=51).contains(&grey), "mid grey gave {grey}");
+        assert_eq!(
+            Palette::from_color(Color::new(255, 255, 255)).lightness,
+            100
+        );
+        assert_eq!(mean_lightness(std::iter::empty()), 0);
+    }
+
+    #[test]
+    fn colourless_images_keep_their_own_colour_as_source() {
+        // Material scoring skips all of these and would pick its blue
+        // fallback (#4285f4).
+        for (r, g, b) in [(0, 0, 0), (128, 128, 128), (250, 250, 250), (20, 22, 24)] {
+            let source = Palette::from_image(&solid(r, g, b)).source;
+            let close = |want: u8, got: u8| want.abs_diff(got) <= 4;
+            assert!(
+                close(r, source.r) && close(g, source.g) && close(b, source.b),
+                "({r}, {g}, {b}) gave {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dark_photo_with_a_small_colourful_area_keeps_that_colour() {
+        let mut image = RgbImage::from_pixel(100, 100, Pixel([15, 15, 18]));
+        for x in 0..30 {
+            for y in 0..30 {
+                image.put_pixel(x, y, Pixel([200, 60, 40]));
+            }
+        }
+        let source = Palette::from_image(&DynamicImage::ImageRgb8(image)).source;
+        assert!(source.r > source.g && source.r > source.b, "got {source}");
+    }
+
+    #[test]
+    fn source_follows_the_dominant_colour() {
+        let pink = Palette::from_image(&solid(200, 111, 201)).source;
+        assert!(
+            pink.r > pink.g && pink.b > pink.g,
+            "expected a pink source, got {pink}"
+        );
+
+        let green = Palette::from_image(&solid(40, 180, 60)).source;
+        assert!(
+            green.g > green.r && green.g > green.b,
+            "expected a green source, got {green}"
+        );
+    }
+
+    #[test]
+    fn from_path_detects_the_format_without_an_extension() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("TranscodedWallpaper");
+        solid(40, 180, 60)
+            .save_with_format(&path, image::ImageFormat::Png)
+            .expect("write image");
+        let from_file = Palette::from_path(&path).expect("palette");
+        assert_eq!(from_file, Palette::from_image(&solid(40, 180, 60)));
+    }
+
+    #[test]
+    fn from_path_reports_missing_and_corrupt_files() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        assert!(matches!(
+            Palette::from_path(dir.path().join("missing.png")),
+            Err(Error::Io(_))
+        ));
+        let corrupt = dir.path().join("corrupt.png");
+        std::fs::write(&corrupt, b"not an image").expect("write file");
+        assert!(matches!(Palette::from_path(&corrupt), Err(Error::Image(_))));
+    }
+
+    #[test]
+    fn from_color_keeps_the_colour_as_source() {
+        let color = Color::new(40, 180, 60);
+        assert_eq!(Palette::from_color(color).source, color);
+        assert_eq!(
+            Palette::from_wallpaper(&source::Wallpaper::Color(color)).expect("palette"),
+            Palette::from_color(color)
+        );
+    }
+
+    #[test]
+    fn dark_mode_surface_is_darker_than_light_mode_surface() {
+        let p = Palette::from_image(&solid(200, 111, 201));
+        let luma = |c: Color| u32::from(c.r) + u32::from(c.g) + u32::from(c.b);
+        assert!(luma(p.dark.surface) < luma(p.light.surface));
+        assert!(luma(p.dark.on_surface) > luma(p.dark.surface));
+    }
+}

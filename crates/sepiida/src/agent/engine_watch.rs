@@ -1,5 +1,5 @@
 //! The agent's view of Wallpaper Engine: watches its `config.json` and
-//! hears when it exits. See `sepiida_core::engine_tracker` for why there is
+//! hears when it exits. See `sepiida_core::wallpaper_engine::tracker` for why there is
 //! no polling.
 
 use std::{
@@ -15,15 +15,13 @@ use std::{
 };
 
 use sepiida_core::{
-    engine_tracker::{self, CONFIG_FILE, Tracker},
     schedule::Event,
+    wallpaper_engine::tracker::{self, CONFIG_FILE, Tracker},
 };
 use tracing::{info, warn};
 
-use crate::{
-    watch::{FileWatcher, MissingFolder},
-    win::wallpaper_engine,
-};
+use super::watch::{FileWatcher, MissingFolder};
+use crate::win::wallpaper_engine;
 
 /// Wallpaper Engine's settings are well under this; a larger file is
 /// treated as changed every time rather than read whole.
@@ -43,7 +41,7 @@ impl EngineWatch {
     /// Starts watching the folder remembered from an earlier run, if it
     /// still exists.
     pub fn start(state_path: PathBuf, events: Sender<Event>) -> Self {
-        let remembered = match engine_tracker::load_folder(&state_path) {
+        let remembered = match tracker::load_folder(&state_path) {
             Ok(folder) => folder.filter(|folder| folder.is_dir()),
             Err(error) => {
                 warn!("{:#}", anyhow::Error::new(error));
@@ -77,7 +75,7 @@ impl EngineWatch {
         let actions = self.tracker.observe(seen);
         if let Some(folder) = actions.watch_folder {
             info!(folder = %folder.display(), "found Wallpaper Engine");
-            if let Err(error) = engine_tracker::save_folder(&self.state_path, &folder) {
+            if let Err(error) = tracker::save_folder(&self.state_path, &folder) {
                 warn!("{:#}", anyhow::Error::new(error));
             }
             self.watch(folder);

@@ -11,9 +11,11 @@ use tracing::{info, warn};
 
 use crate::{
     SettingsWindow, Tray,
+    gui::{
+        settings,
+        tray_icon::{ICON_SIZE, NEUTRAL, dot_pixels},
+    },
     paths::Paths,
-    settings,
-    tray_icon::{ICON_SIZE, NEUTRAL, dot_pixels},
 };
 
 /// When to add the icon again after an Explorer restart, besides at once.

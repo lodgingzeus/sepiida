@@ -3,12 +3,12 @@
 //! elements may be changed.
 //!
 //! Any process on the desktop can post to the window, so every message is
-//! decoded strictly (see `hook_protocol::Command::decode`) and anything
+//! decoded strictly (see `shell::protocol::Command::decode`) and anything
 //! else goes to `DefWindowProcW`.
 
 use std::cell::Cell;
 
-use sepiida_core::hook_protocol::{CONTROL_WINDOW_CLASS, Command};
+use sepiida_core::shell::protocol::{CONTROL_WINDOW_CLASS, Command};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -24,7 +24,7 @@ use windows::{
     core::{HSTRING, PCWSTR},
 };
 
-use crate::{guard, log::log, ui};
+use crate::{guard, log::log, watcher};
 
 thread_local! {
     static WINDOW: Cell<Option<HWND>> = const { Cell::new(None) };
@@ -116,7 +116,7 @@ extern "system" fn window_proc(
     guard("window procedure", LRESULT(0), || {
         match Command::decode(message, wparam.0) {
             Some(command) => {
-                ui::run_command(command);
+                watcher::run_command(command);
                 LRESULT(0)
             }
             None => default(),

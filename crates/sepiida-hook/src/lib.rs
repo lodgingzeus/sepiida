@@ -23,7 +23,7 @@ mod styler;
 #[cfg(windows)]
 mod tap;
 #[cfg(windows)]
-mod ui;
+mod watcher;
 #[cfg(windows)]
 mod xamlom;
 
@@ -101,7 +101,7 @@ mod exports {
             // SAFETY: checked non-null above; the caller passes valid pointers.
             unsafe {
                 *out = core::ptr::null_mut();
-                if *clsid != GUID::from_u128(sepiida_core::hook_protocol::TAP_CLSID) {
+                if *clsid != GUID::from_u128(sepiida_core::shell::protocol::TAP_CLSID) {
                     return CLASS_E_CLASSNOTAVAILABLE;
                 }
                 let factory: IClassFactory = Factory.into();

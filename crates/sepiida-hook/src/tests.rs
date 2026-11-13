@@ -16,8 +16,8 @@ use std::{
 
 use sepiida_core::{
     Color,
-    hook_protocol::{CONTROL_WINDOW_CLASS, Command, TAP_CLSID},
-    xaml_tree::{RECTANGLE_TYPE, TASKBAR_BACKGROUND_NAME, TASKBAR_FRAME_NAME},
+    shell::protocol::{CONTROL_WINDOW_CLASS, Command, TAP_CLSID},
+    shell::tree::{RECTANGLE_TYPE, TASKBAR_BACKGROUND_NAME, TASKBAR_FRAME_NAME},
 };
 use windows::{
     Win32::{

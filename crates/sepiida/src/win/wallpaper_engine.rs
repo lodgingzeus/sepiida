@@ -3,16 +3,16 @@
 //! Wallpaper Engine is found by looking for its running process, which also
 //! answers whether it is active at all. The current wallpaper is then read
 //! from `config.json` in its install folder: `-control getWallpaper` does not
-//! write to a pipe (see `sepiida_core::engine_config`), and reading a file
+//! write to a pipe (see `sepiida_core::wallpaper_engine::config`), and reading a file
 //! means sepiida never starts another program.
 
 use std::{path::PathBuf, thread};
 
 use sepiida_core::{
-    engine_config::read_selected_wallpaper,
-    engine_tracker::Observed,
     source::{Absence, Showing, SourceError, WallpaperSource},
-    wallpaper_engine::project_wallpaper,
+    wallpaper_engine::config::read_selected_wallpaper,
+    wallpaper_engine::project::project_wallpaper,
+    wallpaper_engine::tracker::Observed,
 };
 use windows::{
     Win32::{
