@@ -63,7 +63,11 @@ fn shell_commands_parse() {
         Ok(Command::Shell(ShellCommand::Detach))
     );
     for (args, action) in [
-        (&["shell", "dump"][..], DumpAction::Start),
+        (&["shell", "dump"][..], DumpAction::Start { delay_secs: 0 }),
+        (
+            &["shell", "dump", "--delay", "10"],
+            DumpAction::Start { delay_secs: 10 },
+        ),
         (&["shell", "dump", "collect"], DumpAction::Collect),
         (&["shell", "dump", "stop"], DumpAction::Stop),
     ] {
@@ -90,6 +94,9 @@ fn shell_rejects_bad_arguments() {
         &["shell", "attach", "--from", "0"],
         &["shell", "attach", "--from", "x"],
         &["shell", "attach", "--from", "257"],
+        &["shell", "dump", "--delay", "0"],
+        &["shell", "dump", "--delay", "61"],
+        &["shell", "dump", "--delay", "x"],
     ] {
         assert!(
             matches!(parse(args), Err(CliError::InvalidValue(_))),

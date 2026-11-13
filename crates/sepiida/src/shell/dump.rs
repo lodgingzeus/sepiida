@@ -10,6 +10,8 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -24,13 +26,13 @@ use crate::{
 
 pub fn run(action: DumpAction) -> Result<()> {
     match action {
-        DumpAction::Start => start(),
+        DumpAction::Start { delay_secs } => start(delay_secs),
         DumpAction::Collect => collect(),
         DumpAction::Stop => stop(),
     }
 }
 
-fn start() -> Result<()> {
+fn start(delay_secs: u32) -> Result<()> {
     let dll = shell_hook::hook_dll_path()?;
     // The folder too: opening the file goes through it.
     if let Some(folder) = dll.parent() {
@@ -42,6 +44,10 @@ fn start() -> Result<()> {
         dll.display()
     );
 
+    if delay_secs > 0 {
+        println!("attaching in {delay_secs} s: open the flyout to dump now (Win+N, the clock)");
+        thread::sleep(Duration::from_secs(u64::from(delay_secs)));
+    }
     let hosts = processes::find_in_session(&SANDBOXED_HOSTS)?;
     if hosts.is_empty() {
         println!("none of {} is running", SANDBOXED_HOSTS.join(", "));

@@ -36,9 +36,10 @@ taskbar\" is on in the settings):
                      PowerShell needs quotes around a leading `#`)
   restore            put the original taskbar background back
   detach             restore and stop watching (the DLL stays loaded until Explorer restarts)
-  dump               log the element tree of Start and the notification centre
+  dump [--delay N]   log the element tree of Start and the notification centre
                      (attaches to StartMenuExperienceHost, ShellExperienceHost
-                     and ShellHost; open each surface afterwards)
+                     and ShellHost; open each surface afterwards). --delay waits
+                     N seconds first, to open a flyout (Win+N) before it attaches
   dump collect       copy those logs into %LOCALAPPDATA%\\sepiida\\logs
   dump stop          stop dumping";
 
@@ -70,10 +71,15 @@ pub enum ShellCommand {
 
 /// `sepiida shell dump …`: logs the XAML tree of Start and the
 /// notification centre, to find what to style there.
+/// Longest `shell dump --delay`.
+pub const MAX_DUMP_DELAY_SECS: u32 = 60;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DumpAction {
-    /// Attach in dump mode to every sandboxed shell host.
-    Start,
+    /// Attach in dump mode to every sandboxed shell host, after waiting
+    /// this many seconds (time to open a flyout whose XAML only exists
+    /// while it is shown).
+    Start { delay_secs: u32 },
     /// Copy the dump logs from the hosts' temp folders to sepiida's logs.
     Collect,
     /// Detach the dumping copies.
@@ -137,7 +143,7 @@ pub enum CliError {
     InvalidValue(String),
     #[error(
         "`shell` takes one of: attach [--from N] [--remote], color <rrggbb>, restore, detach, \
-         dump [collect|stop]"
+         dump [--delay N | collect | stop]"
     )]
     ShellArguments,
 }
@@ -215,7 +221,17 @@ fn parse_shell(args: &[&str]) -> Result<ShellCommand, CliError> {
         }
         ["restore"] => Ok(ShellCommand::Restore),
         ["detach"] => Ok(ShellCommand::Detach),
-        ["dump"] => Ok(ShellCommand::Dump(DumpAction::Start)),
+        ["dump"] => Ok(ShellCommand::Dump(DumpAction::Start { delay_secs: 0 })),
+        ["dump", "--delay", seconds] => seconds
+            .parse::<u32>()
+            .ok()
+            .filter(|s| (1..=MAX_DUMP_DELAY_SECS).contains(s))
+            .map(|delay_secs| ShellCommand::Dump(DumpAction::Start { delay_secs }))
+            .ok_or_else(|| {
+                CliError::InvalidValue(format!(
+                    "--delay takes a number of seconds from 1 to {MAX_DUMP_DELAY_SECS}"
+                ))
+            }),
         ["dump", "collect"] => Ok(ShellCommand::Dump(DumpAction::Collect)),
         ["dump", "stop"] => Ok(ShellCommand::Dump(DumpAction::Stop)),
         _ => Err(CliError::ShellArguments),
