@@ -15,8 +15,9 @@ use sepiida_core::{
     accent::ThemeMode,
     config::Config,
     shell::{
+        attach_gate::{AttachGate, Decision},
         colors::role_colors,
-        crash_guard::{CrashGuard, Verdict},
+        crash_guard::Verdict,
         protocol::Command,
     },
 };
@@ -28,9 +29,6 @@ use crate::win::{
     theme,
 };
 
-/// After an Explorer restart, no attach before this long: the taskbar
-/// window exists before its XAML does.
-const SETTLE_AFTER_RESTART: Duration = Duration::from_secs(3);
 /// How long a freshly attached DLL gets to create its control window.
 const CONTROL_WINDOW_TIMEOUT: Duration = Duration::from_secs(3);
 /// When the agent looks again after an Explorer restart, counted from the
@@ -39,48 +37,34 @@ pub const RETRIES_AFTER_RESTART: [Duration; 2] = [Duration::from_secs(4), Durati
 
 pub struct ShellStyling {
     config_path: PathBuf,
-    guard: CrashGuard,
-    /// The setting as of the last apply.
-    enabled: bool,
-    /// No attach before this time (set after an Explorer restart).
-    not_before: Option<Instant>,
-    /// Set by the crash guard; cleared once the setting is seen off, so
-    /// turning it back on works.
-    tripped: bool,
+    gate: AttachGate,
 }
 
 impl ShellStyling {
     pub fn new(config_path: PathBuf) -> Self {
         Self {
             config_path,
-            guard: CrashGuard::default(),
-            enabled: false,
-            not_before: None,
-            tripped: false,
+            gate: AttachGate::default(),
         }
     }
 
     pub fn enabled(&self) -> bool {
-        self.enabled
+        self.gate.enabled()
     }
 
     /// Called after every apply with the setting and the palette in effect.
     /// Never fails: problems are logged and the next apply tries again.
     pub fn sync(&mut self, enabled: bool, palette: &Palette) {
-        if !enabled {
-            self.tripped = false;
-        }
-        self.enabled = enabled && !self.tripped;
-        if !self.enabled {
-            self.stop();
-            return;
-        }
-        if let Some(due) = self.not_before {
-            if Instant::now() < due {
+        match self.gate.decide(enabled, Instant::now()) {
+            Decision::Stop => {
+                self.stop();
+                return;
+            }
+            Decision::Wait => {
                 info!("Explorer restarted moments ago; attaching on the next look");
                 return;
             }
-            self.not_before = None;
+            Decision::Go => {}
         }
         let taskbar = match shell_hook::taskbar() {
             Ok(taskbar) => taskbar,
@@ -113,7 +97,7 @@ impl ShellStyling {
         info!(pid = taskbar.pid, dll = %dll.display(), "attaching the styling DLL to Explorer");
         // Counted before the attempt: a DLL that crashes Explorer may do so
         // before it reports back.
-        self.guard.attached(Instant::now());
+        self.gate.attaching(Instant::now());
         match shell_hook::attach(taskbar, &dll, 1, Method::InProcess) {
             Ok(attached) => {
                 if attached.replaced > 0 {
@@ -145,17 +129,11 @@ impl ShellStyling {
         }
     }
 
-    /// Explorer restarted at `now`; the styling went with the old process.
+    /// Explorer restarted at `at`; the styling went with the old process.
     /// Turns styling off after repeated crashes right after attaching.
-    pub fn explorer_restarted(&mut self, now: Instant) {
-        if !self.enabled {
-            return;
-        }
-        self.not_before = Some(now + SETTLE_AFTER_RESTART);
-        if self.guard.explorer_restarted(now) == Verdict::Disable {
-            self.enabled = false;
-            self.tripped = true;
-            turn_off_after_crashes(&self.config_path, self.guard.crashes());
+    pub fn explorer_restarted(&mut self, at: Instant) {
+        if self.gate.explorer_restarted(at) == Verdict::Disable {
+            turn_off_after_crashes(&self.config_path, self.gate.crashes());
         }
     }
 

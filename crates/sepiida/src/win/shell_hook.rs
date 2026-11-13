@@ -33,7 +33,10 @@ use windows::{
         },
         System::{
             LibraryLoader::{GetProcAddress, LOAD_LIBRARY_FLAGS, LoadLibraryExW},
-            Threading::{CreateEventW, WaitForSingleObject},
+            Threading::{
+                CreateEventW, OpenProcess, PROCESS_SYNCHRONIZE, WaitForMultipleObjects,
+                WaitForSingleObject,
+            },
         },
         UI::WindowsAndMessaging::{
             FindWindowExW, FindWindowW, GetWindowThreadProcessId, HOOKPROC, HWND_MESSAGE,
@@ -396,31 +399,51 @@ impl Drop for Library {
     }
 }
 
-/// `Local\sepiida-hook-ready-<pid>`, set by the DLL once attached.
-struct ReadyEvent(HANDLE);
+/// `Local\sepiida-hook-ready-<pid>`, set by the DLL once attached, and the
+/// target process, so that waiting ends at once if it exits (Explorer
+/// restarted mid-attach) instead of after the full timeout.
+struct ReadyEvent {
+    event: HANDLE,
+    process: Option<HANDLE>,
+}
 
 impl ReadyEvent {
     fn create(pid: u32) -> Result<Self, ShellHookError> {
         let name = HSTRING::from(ready_event_name(pid));
         // SAFETY: manual-reset, initially unset, default security (only
         // this user's processes can open it).
-        unsafe { CreateEventW(None, true, false, &name) }
-            .map(Self)
-            .map_err(ShellHookError::Event)
+        let event =
+            unsafe { CreateEventW(None, true, false, &name) }.map_err(ShellHookError::Event)?;
+        // SAFETY: plain call; without the handle the wait falls back to the
+        // event alone.
+        let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.ok();
+        Ok(Self { event, process })
     }
 
+    /// True only if the DLL reported ready within `timeout`.
     fn wait(&self, timeout: Duration) -> bool {
         let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
-        // SAFETY: the handle is owned by `self` and valid.
-        unsafe { WaitForSingleObject(self.0, millis) == WAIT_OBJECT_0 }
+        // SAFETY: the handles are owned by `self` and valid. The event is
+        // first, so WAIT_OBJECT_0 means "ready".
+        unsafe {
+            match self.process {
+                Some(process) => {
+                    WaitForMultipleObjects(&[self.event, process], false, millis) == WAIT_OBJECT_0
+                }
+                None => WaitForSingleObject(self.event, millis) == WAIT_OBJECT_0,
+            }
+        }
     }
 }
 
 impl Drop for ReadyEvent {
     fn drop(&mut self) {
-        // SAFETY: owned handle, closed once.
+        // SAFETY: owned handles, closed once.
         unsafe {
-            let _ = CloseHandle(self.0);
+            let _ = CloseHandle(self.event);
+            if let Some(process) = self.process {
+                let _ = CloseHandle(process);
+            }
         }
     }
 }

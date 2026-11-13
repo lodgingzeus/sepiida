@@ -51,6 +51,13 @@ impl CrashGuard {
         self.crashes
     }
 
+    /// Forgets every crash and attach, e.g. once the user turned styling
+    /// off.
+    pub fn reset(&mut self) {
+        self.last_attach = None;
+        self.crashes = 0;
+    }
+
     /// The DLL was attached at `now`. An earlier attach that outlived the
     /// window proves the DLL ran without crashing Explorer, so the count
     /// starts again.

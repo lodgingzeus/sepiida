@@ -140,8 +140,8 @@ fn run_loop(
         };
         match event {
             Ok(event) => {
-                if event == Event::ExplorerRestarted {
-                    agent.styling.explorer_restarted(Instant::now());
+                if let Event::ExplorerRestarted(at) = event {
+                    agent.styling.explorer_restarted(at);
                 }
                 if scheduler.handle(event, Instant::now()) == Flow::Quit {
                     return Ok(());
@@ -190,7 +190,7 @@ fn watch_transcoded_wallpaper(events: Sender<Event>) -> Option<FileWatcher> {
 /// XAML comes up a little after its taskbar window, so the agent also looks
 /// again a few seconds later to attach the styling DLL.
 fn explorer_restarted(events: &Sender<Event>) {
-    let _ = events.send(Event::ExplorerRestarted);
+    let _ = events.send(Event::ExplorerRestarted(Instant::now()));
     for delay in RETRIES_AFTER_RESTART {
         let events = events.clone();
         let spawned = thread::Builder::new()
