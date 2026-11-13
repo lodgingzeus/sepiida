@@ -55,6 +55,22 @@ It does not poll for Wallpaper Engine starting; until then, any other
 change (or `sepiida apply`) picks it up. Only one copy
 runs per user session. It logs to `%LOCALAPPDATA%\sepiida\logs\sepiida.log`.
 
+### Taskbar styling (experimental)
+
+```
+sepiida shell attach             load sepiida_hook.dll into Explorer and watch the taskbar
+sepiida shell color #336699      paint the taskbar background in this colour
+sepiida shell restore            put the original taskbar background back
+sepiida shell detach             restore and stop watching
+```
+
+`attach` uses the XAML Diagnostics API to load `sepiida_hook.dll` (from the
+folder `sepiida.exe` is in) into Explorer. Windows keeps that DLL loaded until
+Explorer restarts, even after `detach`, so the file cannot be replaced while
+Explorer runs: restart Explorer first, or use a new folder. If anything goes
+wrong, restarting Explorer brings back the stock taskbar. The DLL logs to
+`%LOCALAPPDATA%\sepiida\logs\hook.log`.
+
 ## Settings
 
 Settings live in `%APPDATA%\sepiida\config.toml`. Every field is optional:

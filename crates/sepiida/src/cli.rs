@@ -14,6 +14,7 @@ usage:
   sepiida apply [options]          theme Windows from the current wallpaper
   sepiida run                      stay in the background (tray icon) and re-theme when the wallpaper changes
   sepiida restore [--dry-run]      put back the accent colour you had before sepiida
+  sepiida shell <command>          experimental taskbar styling (see below)
 
 apply options:
   --source auto|windows|wallpaper-engine   where to read the wallpaper (default: from settings)
@@ -21,7 +22,13 @@ apply options:
   --dry-run                                print what would change without changing it
 
 `apply` follows the settings file: a locked colour is used instead of the
-wallpaper, and nothing is written for features that are turned off.";
+wallpaper, and nothing is written for features that are turned off.
+
+shell commands (experimental):
+  attach           load the styling DLL into Explorer and start watching the taskbar
+  color <#rrggbb>  paint the taskbar background in this colour
+  restore          put the original taskbar background back
+  detach           restore and stop watching (the DLL stays loaded until Explorer restarts)";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -31,6 +38,16 @@ pub enum Command {
     Apply(ApplyOptions),
     Restore { dry_run: bool },
     Run,
+    Shell(ShellCommand),
+}
+
+/// `sepiida shell …`: drives the styling DLL inside Explorer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellCommand {
+    Attach,
+    Color(Color),
+    Restore,
+    Detach,
 }
 
 /// What was given on the command line. `None` means "use the setting".
@@ -88,6 +105,8 @@ pub enum CliError {
     Repeated(&'static str),
     #[error("{0}")]
     InvalidValue(String),
+    #[error("`shell` takes one of: attach, color <#rrggbb>, restore, detach")]
+    ShellArguments,
 }
 
 pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, CliError> {
@@ -108,7 +127,21 @@ pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, CliError> {
             command: "restore",
             option: (*other).to_owned(),
         }),
+        ["shell", rest @ ..] => parse_shell(rest).map(Command::Shell),
         [other, ..] => Err(CliError::UnknownCommand((*other).to_owned())),
+    }
+}
+
+fn parse_shell(args: &[&str]) -> Result<ShellCommand, CliError> {
+    match args {
+        ["attach"] => Ok(ShellCommand::Attach),
+        ["color", value] => value
+            .parse()
+            .map(ShellCommand::Color)
+            .map_err(|e: sepiida_core::InvalidColor| CliError::InvalidValue(e.to_string())),
+        ["restore"] => Ok(ShellCommand::Restore),
+        ["detach"] => Ok(ShellCommand::Detach),
+        _ => Err(CliError::ShellArguments),
     }
 }
 
@@ -170,6 +203,45 @@ mod tests {
             Command::Apply(options) => Ok(options),
             other => panic!("expected apply, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn shell_commands_parse() {
+        assert_eq!(
+            parse(&["shell", "attach"]),
+            Ok(Command::Shell(ShellCommand::Attach))
+        );
+        assert_eq!(
+            parse(&["shell", "color", "#1A2b3c"]),
+            Ok(Command::Shell(ShellCommand::Color(Color::new(
+                0x1a, 0x2b, 0x3c
+            ))))
+        );
+        assert_eq!(
+            parse(&["shell", "restore"]),
+            Ok(Command::Shell(ShellCommand::Restore))
+        );
+        assert_eq!(
+            parse(&["shell", "detach"]),
+            Ok(Command::Shell(ShellCommand::Detach))
+        );
+    }
+
+    #[test]
+    fn shell_rejects_bad_arguments() {
+        for args in [
+            &["shell"][..],
+            &["shell", "paint"],
+            &["shell", "attach", "now"],
+            &["shell", "color"],
+            &["shell", "color", "#1a2b3c", "extra"],
+        ] {
+            assert_eq!(parse(args), Err(CliError::ShellArguments), "{args:?}");
+        }
+        assert!(matches!(
+            parse(&["shell", "color", "red"]),
+            Err(CliError::InvalidValue(_))
+        ));
     }
 
     #[test]

@@ -19,6 +19,8 @@ mod settings;
 #[cfg(any(windows, test))]
 mod settings_model;
 #[cfg(windows)]
+mod shell;
+#[cfg(windows)]
 mod tray;
 #[cfg(any(windows, test))]
 mod tray_icon;
@@ -30,7 +32,7 @@ mod win;
 use anyhow::{Context, Result, bail};
 use sepiida_core::{Palette, Tones};
 
-use crate::cli::{ApplyOptions, Command};
+use crate::cli::{ApplyOptions, Command, ShellCommand};
 
 #[cfg(windows)]
 slint::include_modules!();
@@ -52,6 +54,7 @@ pub fn cli_main() -> Result<()> {
         Command::Apply(options) => apply(options),
         Command::Restore { dry_run } => restore(dry_run),
         Command::Run => run_agent(),
+        Command::Shell(command) => shell(command),
     }
 }
 
@@ -120,6 +123,16 @@ fn restore(_dry_run: bool) -> Result<()> {
 #[cfg(windows)]
 fn restore(dry_run: bool) -> Result<()> {
     restore::run_cli(dry_run)
+}
+
+#[cfg(not(windows))]
+fn shell(_command: ShellCommand) -> Result<()> {
+    bail!("`sepiida shell` only runs on Windows")
+}
+
+#[cfg(windows)]
+fn shell(command: ShellCommand) -> Result<()> {
+    shell::run_cli(command)
 }
 
 /// The settings window on its own, without the tray. Changes reach a
