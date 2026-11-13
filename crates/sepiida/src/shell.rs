@@ -6,7 +6,7 @@ use sepiida_core::shell::protocol::Command;
 
 use crate::{
     cli::ShellCommand,
-    win::shell_hook::{self, Attached, Method},
+    win::shell_hook::{self, Attached, Method, ModuleCheck},
 };
 
 const LOG_HINT: &str = "%LOCALAPPDATA%\\sepiida\\logs\\hook.log";
@@ -42,11 +42,10 @@ fn report(attached: &Attached) {
             hr.0
         );
     }
-    match &attached.loaded {
-        Ok(Some(path)) => println!("DLL loaded in Explorer: yes ({})", path.display()),
-        Ok(None) => println!("DLL loaded in Explorer: no"),
-        Err(error) => println!("DLL loaded in Explorer: could not check ({error})"),
+    if let Some(check) = &attached.loaded_while_hooked {
+        print_loaded("while the hook was installed", check);
     }
+    print_loaded("now", &attached.loaded);
     if attached.ready {
         println!(
             "attached: the DLL is watching a XAML thread's visual tree. {LOG_HINT} says \
@@ -54,6 +53,14 @@ fn report(attached: &Attached) {
         );
     } else {
         println!("the DLL did not report back; see {LOG_HINT}");
+    }
+}
+
+fn print_loaded(when: &str, check: &ModuleCheck) {
+    match check {
+        Ok(Some(path)) => println!("DLL loaded in Explorer {when}: yes ({})", path.display()),
+        Ok(None) => println!("DLL loaded in Explorer {when}: no"),
+        Err(error) => println!("DLL loaded in Explorer {when}: could not check ({error})"),
     }
 }
 

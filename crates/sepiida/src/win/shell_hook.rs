@@ -89,8 +89,14 @@ pub struct Attached {
     pub ready: bool,
     /// Where Explorer has the DLL loaded from, if it has; or why that
     /// could not be checked.
-    pub loaded: Result<Option<PathBuf>, windows::core::Error>,
+    pub loaded: ModuleCheck,
+    /// In-process only: the same check made while the hook was still
+    /// installed. Loaded then but not after means the hook procedure never
+    /// acted on the attach message.
+    pub loaded_while_hooked: Option<ModuleCheck>,
 }
+
+pub type ModuleCheck = Result<Option<PathBuf>, windows::core::Error>;
 
 type InitializeExport = unsafe extern "system" fn(u32, u32, *mut u32) -> HRESULT;
 
@@ -139,10 +145,15 @@ pub fn attach(
     from: u32,
     method: Method,
 ) -> Result<Attached, ShellHookError> {
+    let mut loaded_while_hooked = None;
     let ready = ReadyEvent::create(taskbar.pid)?;
     let library = Library::load(dll)?;
     let (remote_result, ready) = match method {
-        Method::InProcess => (None, attach_in_process(taskbar, &library, from, &ready)?),
+        Method::InProcess => {
+            let (ready, while_hooked) = attach_in_process(taskbar, &library, from, &ready)?;
+            loaded_while_hooked = Some(while_hooked);
+            (None, ready)
+        }
         Method::Remote => {
             let result = attach_remote(taskbar.pid, &library, from)?;
             (Some(result), ready.wait(READY_TIMEOUT))
@@ -152,6 +163,7 @@ pub fn attach(
         remote_result,
         ready,
         loaded: modules::loaded_module(taskbar.pid, HOOK_DLL),
+        loaded_while_hooked,
     })
 }
 
@@ -160,7 +172,7 @@ fn attach_in_process(
     library: &Library,
     from: u32,
     ready: &ReadyEvent,
-) -> Result<bool, ShellHookError> {
+) -> Result<(bool, ModuleCheck), ShellHookError> {
     let proc = library.export(HOOK_PROC_EXPORT)?;
     // SAFETY: the export has the HOOKPROC signature (see the DLL's
     // `SepiidaCallWndProc`).
@@ -192,12 +204,13 @@ fn attach_in_process(
     // The DLL pins itself inside Explorer before attaching, so the hook can
     // go once the DLL has reported back (or given up).
     let confirmed = sent.is_ok() && ready.wait(READY_TIMEOUT);
+    let while_hooked = modules::loaded_module(taskbar.pid, HOOK_DLL);
     // SAFETY: the hook handle from above, removed once.
     if let Err(error) = unsafe { UnhookWindowsHookEx(hook) } {
         eprintln!("warning: could not remove the hook: {error}");
     }
     sent.map_err(ShellHookError::Trigger)?;
-    Ok(confirmed)
+    Ok((confirmed, while_hooked))
 }
 
 fn attach_remote(pid: u32, library: &Library, from: u32) -> Result<(u32, HRESULT), ShellHookError> {

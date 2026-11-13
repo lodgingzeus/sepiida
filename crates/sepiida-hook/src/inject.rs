@@ -43,6 +43,9 @@ type InitializeXamlDiagnosticsEx =
 
 /// Set while an in-process attach is running in this process.
 static ATTACHING: AtomicBool = AtomicBool::new(false);
+/// Set the first time the hook procedure runs in this process, so the log
+/// shows whether Windows loaded the DLL into Explorer at all.
+static HOOK_SEEN: AtomicBool = AtomicBool::new(false);
 
 /// Asks XAML in process `pid` to load this DLL, trying connections from
 /// `from` on. Returns the connection number that answered and its result.
@@ -165,6 +168,9 @@ pub unsafe extern "system" fn SepiidaCallWndProc(
     lparam: LPARAM,
 ) -> LRESULT {
     guard("SepiidaCallWndProc", (), || {
+        if !HOOK_SEEN.swap(true, Ordering::AcqRel) {
+            log!("hook procedure running in this process (code {code})");
+        }
         if code != HC_ACTION as i32 || lparam.0 == 0 {
             return;
         }
