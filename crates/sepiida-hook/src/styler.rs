@@ -68,7 +68,7 @@ impl Styler {
             return;
         }
         log!("taskbar background found: {handle:#x}");
-        self.log_fill_chain(handle);
+        self.log_chain(handle, "Fill");
         let Some(fill_index) = self.property_index(handle, w!("Fill")) else {
             return;
         };
@@ -96,11 +96,14 @@ impl Styler {
         }
     }
 
+    /// Paints every taskbar background in `color`. If the brush cannot take
+    /// the colour, nothing is painted and the previous colour (if any)
+    /// stays: an uncoloured brush would make the taskbar transparent.
     pub fn set_color(&mut self, color: Color) {
-        self.color = Some(color);
         if !self.update_brush(color) {
             return;
         }
+        self.color = Some(color);
         let handles: Vec<Handle> = self.targets.keys().copied().collect();
         for handle in handles {
             self.paint(handle);
@@ -139,9 +142,21 @@ impl Styler {
         // SAFETY: plain call on a live service with handles it issued.
         let hr = unsafe { self.service.SetProperty(handle, brush, target.fill_index) };
         log!("set Fill on {handle:#x}: {hr}");
-        if hr.is_ok() {
-            target.styled = true;
+        if hr.is_err() {
+            return;
         }
+        target.styled = true;
+        let fill_index = target.fill_index;
+        // Read back: did XAML keep our brush?
+        let now = self.property(handle, fill_index);
+        log!(
+            "Fill on {handle:#x} is now {now:#x?} (our brush {brush:#x}): {}",
+            if now == Some(brush) {
+                "kept"
+            } else {
+                "NOT kept"
+            }
+        );
     }
 
     /// Creates the shared brush if needed and gives it `color`. Returns
@@ -173,6 +188,9 @@ impl Styler {
             }
         };
         log!("brush colour {color} via {:?}: {ok}", self.color_path);
+        if ok {
+            self.log_chain(brush, "Color");
+        }
         ok
     }
 
@@ -254,9 +272,11 @@ impl Styler {
         (hr.is_ok() && value != 0).then_some(value)
     }
 
-    /// Logs where the rectangle's `Fill` comes from (style, template,
-    /// local value…), to learn how Explorer sets it.
-    fn log_fill_chain(&self, handle: InstanceHandle) {
+    /// Logs one property's entries in the element's property chain: its
+    /// type and value strings and where the value comes from (style,
+    /// template, local value…). This is how XAML itself names the types
+    /// and formats the values we pass to `CreateInstance`.
+    fn log_chain(&self, handle: InstanceHandle, property: &str) {
         let (mut source_count, mut value_count) = (0u32, 0u32);
         let mut sources: *mut PropertyChainSource = core::ptr::null_mut();
         let mut values: *mut PropertyChainValue = core::ptr::null_mut();
@@ -281,12 +301,12 @@ impl Styler {
                 take_array(values, value_count),
             )
         };
-        for value in values.iter().filter(|v| v.PropertyName == "Fill") {
+        for value in values.iter().filter(|v| v.PropertyName == property) {
             let source = sources
                 .get(value.PropertyChainIndex as usize)
                 .map(|s| (s.Source.0, s.Name.to_string(), s.TargetType.to_string()));
             log!(
-                "Fill: type={} declared={} value_type={} value={} overridden={} null={} source={source:?}",
+                "{property} of {handle:#x}: type={} declared={} value_type={} value={} overridden={} null={} source={source:?}",
                 value.Type,
                 value.DeclaringType,
                 value.ValueType,

@@ -94,14 +94,15 @@ pub fn hook_dll_path() -> Result<PathBuf, ShellHookError> {
     }
 }
 
-/// Asks Explorer's XAML to load the DLL, then waits for the DLL to confirm.
-pub fn attach(pid: u32, dll: &Path) -> Result<Attached, ShellHookError> {
+/// Asks Explorer's XAML to load the DLL, trying connection numbers from
+/// `from` on, then waits for the DLL to confirm.
+pub fn attach(pid: u32, dll: &Path, from: u32) -> Result<Attached, ShellHookError> {
     let ready = ReadyEvent::create(pid)?;
     let initialize = load_initialize()?;
     let dll = HSTRING::from(dll.as_os_str());
     let not_found = ERROR_NOT_FOUND.to_hresult();
     let mut tried = 0;
-    for (_, connection) in connection_names() {
+    for (_, connection) in connection_names().skip_while(|(n, _)| *n < from) {
         tried += 1;
         let hr = call_on_fresh_thread(initialize, &connection, pid, &dll);
         if hr == not_found {

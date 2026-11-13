@@ -4,6 +4,7 @@ use sepiida_core::{
     Color,
     accent::ThemeMode,
     config::{Config, ModeSetting},
+    hook_protocol::MAX_CONNECTION,
     source::SourceChoice,
 };
 
@@ -25,10 +26,12 @@ apply options:
 wallpaper, and nothing is written for features that are turned off.
 
 shell commands (experimental):
-  attach           load the styling DLL into Explorer and start watching the taskbar
-  color <#rrggbb>  paint the taskbar background in this colour
-  restore          put the original taskbar background back
-  detach           restore and stop watching (the DLL stays loaded until Explorer restarts)";
+  attach [--from N]  load the styling DLL into Explorer; --from tries
+                     VisualDiagConnectionN onwards (default 1)
+  color <rrggbb>     paint the taskbar background in this colour (`#` optional;
+                     PowerShell needs quotes around a leading `#`)
+  restore            put the original taskbar background back
+  detach             restore and stop watching (the DLL stays loaded until Explorer restarts)";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -44,7 +47,10 @@ pub enum Command {
 /// `sepiida shell …`: drives the styling DLL inside Explorer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellCommand {
-    Attach,
+    /// Try diagnostics connections from this number on.
+    Attach {
+        from: u32,
+    },
     Color(Color),
     Restore,
     Detach,
@@ -105,7 +111,7 @@ pub enum CliError {
     Repeated(&'static str),
     #[error("{0}")]
     InvalidValue(String),
-    #[error("`shell` takes one of: attach, color <#rrggbb>, restore, detach")]
+    #[error("`shell` takes one of: attach [--from N], color <rrggbb>, restore, detach")]
     ShellArguments,
 }
 
@@ -134,11 +140,26 @@ pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, CliError> {
 
 fn parse_shell(args: &[&str]) -> Result<ShellCommand, CliError> {
     match args {
-        ["attach"] => Ok(ShellCommand::Attach),
-        ["color", value] => value
-            .parse()
-            .map(ShellCommand::Color)
-            .map_err(|e: sepiida_core::InvalidColor| CliError::InvalidValue(e.to_string())),
+        ["attach"] => Ok(ShellCommand::Attach { from: 1 }),
+        ["attach", "--from", n] => match n.parse::<u32>() {
+            Ok(from) if (1..=MAX_CONNECTION).contains(&from) => Ok(ShellCommand::Attach { from }),
+            _ => Err(CliError::InvalidValue(format!(
+                "--from takes a number from 1 to {MAX_CONNECTION}"
+            ))),
+        },
+        ["color", value] => {
+            // PowerShell drops an unquoted argument starting with `#` as a
+            // comment, so the `#` is optional.
+            let with_hash = if value.starts_with('#') {
+                (*value).to_owned()
+            } else {
+                format!("#{value}")
+            };
+            with_hash
+                .parse()
+                .map(ShellCommand::Color)
+                .map_err(|e: sepiida_core::InvalidColor| CliError::InvalidValue(e.to_string()))
+        }
         ["restore"] => Ok(ShellCommand::Restore),
         ["detach"] => Ok(ShellCommand::Detach),
         _ => Err(CliError::ShellArguments),
@@ -209,7 +230,17 @@ mod tests {
     fn shell_commands_parse() {
         assert_eq!(
             parse(&["shell", "attach"]),
-            Ok(Command::Shell(ShellCommand::Attach))
+            Ok(Command::Shell(ShellCommand::Attach { from: 1 }))
+        );
+        assert_eq!(
+            parse(&["shell", "attach", "--from", "3"]),
+            Ok(Command::Shell(ShellCommand::Attach { from: 3 }))
+        );
+        assert_eq!(
+            parse(&["shell", "color", "1a2b3c"]),
+            Ok(Command::Shell(ShellCommand::Color(Color::new(
+                0x1a, 0x2b, 0x3c
+            ))))
         );
         assert_eq!(
             parse(&["shell", "color", "#1A2b3c"]),
@@ -238,10 +269,18 @@ mod tests {
         ] {
             assert_eq!(parse(args), Err(CliError::ShellArguments), "{args:?}");
         }
-        assert!(matches!(
-            parse(&["shell", "color", "red"]),
-            Err(CliError::InvalidValue(_))
-        ));
+        for args in [
+            &["shell", "color", "red"][..],
+            &["shell", "color", "##123456"],
+            &["shell", "attach", "--from", "0"],
+            &["shell", "attach", "--from", "x"],
+            &["shell", "attach", "--from", "257"],
+        ] {
+            assert!(
+                matches!(parse(args), Err(CliError::InvalidValue(_))),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]

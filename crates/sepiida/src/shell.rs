@@ -9,13 +9,15 @@ use crate::{cli::ShellCommand, win::shell_hook};
 pub fn run_cli(command: ShellCommand) -> Result<()> {
     let pid = shell_hook::explorer_pid()?;
     match command {
-        ShellCommand::Attach => {
+        ShellCommand::Attach { from } => {
             let dll = shell_hook::hook_dll_path()?;
             println!("attaching {} to Explorer (pid {pid})", dll.display());
-            let attached = shell_hook::attach(pid, &dll)?;
+            let attached = shell_hook::attach(pid, &dll, from)?;
             if attached.ready {
                 println!(
-                    "attached through {}; the DLL is watching the taskbar",
+                    "attached through {}; the DLL is watching that XAML thread's visual tree.\n\
+                     hook.log says whether it found the taskbar; if not, detach and try \
+                     `sepiida shell attach --from <next number>`",
                     attached.connection
                 );
             } else {

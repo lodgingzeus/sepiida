@@ -1,14 +1,11 @@
-//! Work on the XAML UI thread: the visual tree callback, the element tree
-//! and the styler. XAML calls the callback on the thread that owns the
+//! Work on the XAML UI thread: the visual tree callback, the taskbar
+//! finder and the styler. XAML calls the callback on the thread that owns the
 //! elements, and commands arrive on the same thread through the control
 //! window, so all of this state is thread-local and needs no locking.
 
 use std::cell::RefCell;
 
-use sepiida_core::{
-    hook_protocol::Command,
-    xaml_tree::{ElementTree, TASKBAR_BACKGROUND_NAME, TASKBAR_FRAME_NAME},
-};
+use sepiida_core::{hook_protocol::Command, taskbar_finder::TaskbarFinder};
 use windows::{
     Win32::Foundation::{E_UNEXPECTED, S_OK},
     core::{HRESULT, PCWSTR, implement},
@@ -28,9 +25,19 @@ use crate::{
 
 struct UiState {
     generation: u64,
-    tree: ElementTree,
+    finder: TaskbarFinder,
     styler: Styler,
-    saw_taskbar: bool,
+}
+
+impl UiState {
+    fn log_summary(&self) {
+        log!(
+            "state: {} elements, taskbar seen: {}, {} taskbar background(s)",
+            self.finder.element_count(),
+            self.finder.saw_frame(),
+            self.finder.matched_count()
+        );
+    }
 }
 
 thread_local! {
@@ -112,9 +119,8 @@ fn on_change(
             control::ensure_window();
             *slot = Some(UiState {
                 generation: watcher.generation,
-                tree: ElementTree::new(),
+                finder: TaskbarFinder::new(),
                 styler: Styler::new(watcher.diagnostics.clone(), watcher.service.clone()),
-                saw_taskbar: false,
             });
         }
         let Some(state) = slot.as_mut() else {
@@ -122,8 +128,8 @@ fn on_change(
         };
 
         if mutation_type == VisualMutationType::REMOVE {
-            let removed = state.tree.remove(element.Handle);
-            state.styler.forget(&removed);
+            let gone = state.finder.removed(element.Handle);
+            state.styler.forget(&gone);
             return;
         }
         if mutation_type != VisualMutationType::ADD {
@@ -132,17 +138,17 @@ fn on_change(
 
         let name = element.Name.to_string();
         let type_name = element.Type.to_string();
-        state
-            .tree
-            .add(element.Handle, relation.Parent, &type_name, &name);
-        if name == TASKBAR_FRAME_NAME && !state.saw_taskbar {
-            state.saw_taskbar = true;
+        let added = state
+            .finder
+            .added(element.Handle, relation.Parent, &type_name, &name);
+        if added.first_frame {
             log!("found a taskbar ({type_name})");
         }
-        if name == TASKBAR_BACKGROUND_NAME || name == TASKBAR_FRAME_NAME {
-            for handle in state.tree.taskbar_backgrounds() {
-                state.styler.found(handle);
-            }
+        if let Some(path) = added.near_miss {
+            log!("BackgroundFill not under a TaskbarFrame (yet): {path}");
+        }
+        for handle in added.matched {
+            state.styler.found(handle);
         }
     });
 }
@@ -156,6 +162,10 @@ pub fn run_command(command: Command) {
             log!("command arrived during a tree callback; ignored");
             return None;
         };
+        match slot.as_ref() {
+            Some(state) => state.log_summary(),
+            None => log!("state: no visual tree seen on this thread"),
+        }
         match command {
             Command::SetColor(color) => {
                 if let Some(state) = slot.as_mut() {

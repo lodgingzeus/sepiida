@@ -58,8 +58,8 @@ runs per user session. It logs to `%LOCALAPPDATA%\sepiida\logs\sepiida.log`.
 ### Taskbar styling (experimental)
 
 ```
-sepiida shell attach             load sepiida_hook.dll into Explorer and watch the taskbar
-sepiida shell color #336699      paint the taskbar background in this colour
+sepiida shell attach [--from N]  load sepiida_hook.dll into Explorer and watch the taskbar
+sepiida shell color 336699       paint the taskbar background in this colour (# optional)
 sepiida shell restore            put the original taskbar background back
 sepiida shell detach             restore and stop watching
 ```

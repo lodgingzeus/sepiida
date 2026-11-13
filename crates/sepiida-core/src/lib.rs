@@ -10,6 +10,7 @@ pub mod hook_protocol;
 pub mod schedule;
 pub mod snapshot;
 pub mod source;
+pub mod taskbar_finder;
 pub mod wallpaper_engine;
 pub mod xaml_tree;
 

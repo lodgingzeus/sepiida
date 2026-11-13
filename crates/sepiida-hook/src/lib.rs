@@ -27,6 +27,9 @@ mod ui;
 #[cfg(windows)]
 mod xamlom;
 
+#[cfg(all(test, windows))]
+mod tests;
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 /// Runs `body`, turning a panic into `fallback` (and a log line on
@@ -116,7 +119,7 @@ mod exports {
 }
 
 #[cfg(test)]
-mod tests {
+mod guard_tests {
     use super::guard;
 
     #[test]

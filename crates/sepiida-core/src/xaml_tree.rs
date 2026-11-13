@@ -23,6 +23,8 @@ pub const TASKBAR_FRAME_NAME: &str = "TaskbarFrame";
 /// broken or hostile stream of callbacks from growing memory inside the
 /// shell process without bound.
 pub const MAX_ELEMENTS: usize = 200_000;
+/// Ancestors `ElementTree::path` lists before stopping.
+pub const MAX_PATH_DEPTH: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Element {
@@ -114,6 +116,26 @@ impl ElementTree {
             current = element.parent;
             Some(element)
         })
+    }
+
+    /// The element and its known ancestors as `Type#Name < Type#Name < …`,
+    /// nearest first, for logs. At most `MAX_PATH_DEPTH` ancestors.
+    pub fn path(&self, handle: Handle) -> String {
+        let describe = |e: &Element| {
+            if e.name.is_empty() {
+                e.type_name.to_string()
+            } else {
+                format!("{}#{}", e.type_name, e.name)
+            }
+        };
+        let Some(element) = self.elements.get(&handle) else {
+            return format!("(unknown {handle:#x})");
+        };
+        std::iter::once(element)
+            .chain(self.ancestors(handle).take(MAX_PATH_DEPTH))
+            .map(describe)
+            .collect::<Vec<_>>()
+            .join(" < ")
     }
 
     /// Whether this element is the rectangle that paints a taskbar's
@@ -220,6 +242,26 @@ mod tests {
         let mut found = tree.taskbar_backgrounds();
         found.sort_unstable();
         assert_eq!(found, vec![5, 25]);
+    }
+
+    #[test]
+    fn path_lists_the_element_and_its_ancestors() {
+        let tree = taskbar();
+        assert_eq!(
+            tree.path(4),
+            "Windows.UI.Xaml.Controls.Grid < Taskbar.TaskbarBackground#BackgroundControl \
+             < Windows.UI.Xaml.Controls.Grid#RootGrid < Taskbar.TaskbarFrame#TaskbarFrame"
+        );
+        assert_eq!(tree.path(99), "(unknown 0x63)");
+    }
+
+    #[test]
+    fn path_is_bounded() {
+        let mut tree = ElementTree::new();
+        for handle in 1..=100 {
+            tree.add(handle, handle - 1, GRID, "");
+        }
+        assert_eq!(tree.path(100).matches(" < ").count(), MAX_PATH_DEPTH);
     }
 
     #[test]
