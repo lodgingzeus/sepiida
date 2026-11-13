@@ -121,6 +121,7 @@ fn build_tray(events: &Sender<Event>, paused: bool, accent: Color) -> Result<Tra
 
     let sender = events.clone();
     tray.on_apply_now(move || {
+        info!(trigger = "Apply now", "change noticed");
         let _ = sender.send(Event::ApplyNow);
     });
 

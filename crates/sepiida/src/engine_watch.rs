@@ -7,7 +7,11 @@ use std::{
     hash::{DefaultHasher, Hasher},
     io::Read,
     path::{Path, PathBuf},
-    sync::{Mutex, mpsc::Sender},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::Sender,
+    },
 };
 
 use sepiida_core::{
@@ -30,6 +34,9 @@ pub struct EngineWatch {
     watcher: Option<FileWatcher>,
     state_path: PathBuf,
     events: Sender<Event>,
+    /// Whether Wallpaper Engine was running when last seen. Set when it is
+    /// found, cleared when it exits; read by the `config.json` watcher.
+    running: Arc<AtomicBool>,
 }
 
 impl EngineWatch {
@@ -48,6 +55,7 @@ impl EngineWatch {
             watcher: None,
             state_path,
             events,
+            running: Arc::new(AtomicBool::new(false)),
         };
         if let Some(folder) = remembered {
             this.watch(folder);
@@ -65,6 +73,7 @@ impl EngineWatch {
                 return;
             }
         };
+        self.running.store(seen.is_some(), Ordering::SeqCst);
         let actions = self.tracker.observe(seen);
         if let Some(folder) = actions.watch_folder {
             info!(folder = %folder.display(), "found Wallpaper Engine");
@@ -75,7 +84,9 @@ impl EngineWatch {
         }
         if let Some(process_id) = actions.wait_for_exit {
             let events = self.events.clone();
+            let running = Arc::clone(&self.running);
             wallpaper_engine::wait_for_exit(process_id, move || {
+                running.store(false, Ordering::SeqCst);
                 info!(trigger = "Wallpaper Engine exited", "change noticed");
                 // In Auto mode the Windows wallpaper takes over.
                 let _ = events.send(Event::Changed);
@@ -85,9 +96,12 @@ impl EngineWatch {
 
     fn watch(&mut self, folder: PathBuf) {
         let events = self.events.clone();
+        let running = Arc::clone(&self.running);
         let file = folder.join(CONFIG_FILE);
-        // Only a change in content counts: Wallpaper Engine may rewrite the
-        // file without changing it, which must not cost an apply.
+        // While Wallpaper Engine runs, only a change in content counts: it
+        // may rewrite the file without changing it, which must not cost an
+        // apply. While it is closed, any write counts: it rewrites the file
+        // when it starts (seen on Windows 11), and nothing else writes it.
         let last = Mutex::new(content_hash(&file));
         let watched = file.clone();
         match FileWatcher::new(vec![file], MissingFolder::Fail, move || {
@@ -97,7 +111,10 @@ impl EngineWatch {
                 // A panic elsewhere poisoned it; err on the side of applying.
                 Err(_) => true,
             };
-            if changed || current.is_none() {
+            if !running.load(Ordering::SeqCst) {
+                info!(trigger = "Wallpaper Engine started", "change noticed");
+                let _ = events.send(Event::Changed);
+            } else if changed || current.is_none() {
                 info!(trigger = "Wallpaper Engine settings", "change noticed");
                 let _ = events.send(Event::Changed);
             }

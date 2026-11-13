@@ -7,7 +7,8 @@
 //!   running, it remembers the install folder (on disk, across restarts)
 //!   and waits on that process so it hears when it exits;
 //! - it watches `config.json` in the remembered folder, which Wallpaper
-//!   Engine writes when its wallpaper or playlist changes.
+//!   Engine writes when its wallpaper or playlist changes, and also when
+//!   it starts, so a start is noticed without polling.
 //!
 //! Until Wallpaper Engine has been seen once, only an apply for another
 //! reason (a Windows wallpaper change, a settings change, "apply now")
