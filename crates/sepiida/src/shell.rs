@@ -4,39 +4,61 @@
 use anyhow::Result;
 use sepiida_core::shell::protocol::Command;
 
-use crate::{cli::ShellCommand, win::shell_hook};
+use crate::{
+    cli::ShellCommand,
+    win::shell_hook::{self, Attached, Method},
+};
+
+const LOG_HINT: &str = "%LOCALAPPDATA%\\sepiida\\logs\\hook.log";
 
 pub fn run_cli(command: ShellCommand) -> Result<()> {
-    let pid = shell_hook::explorer_pid()?;
+    let taskbar = shell_hook::taskbar()?;
     match command {
-        ShellCommand::Attach { from } => {
+        ShellCommand::Attach { from, remote } => {
             let dll = shell_hook::hook_dll_path()?;
-            println!("attaching {} to Explorer (pid {pid})", dll.display());
-            let attached = shell_hook::attach(pid, &dll, from)?;
-            if attached.ready {
-                println!(
-                    "attached through {}; the DLL is watching that XAML thread's visual tree.\n\
-                     hook.log says whether it found the taskbar; if not, detach and try \
-                     `sepiida shell attach --from <next number>`",
-                    attached.connection
-                );
+            let method = if remote {
+                Method::Remote
             } else {
-                println!(
-                    "XAML accepted the request through {}, but the DLL did not report back; \
-                     see %LOCALAPPDATA%\\sepiida\\logs\\hook.log",
-                    attached.connection
-                );
-            }
+                Method::InProcess
+            };
+            println!(
+                "attaching {} to Explorer (pid {}), {method:?}, connections from {from}",
+                dll.display(),
+                taskbar.pid
+            );
+            report(&shell_hook::attach(&taskbar, &dll, from, method)?);
         }
-        ShellCommand::Color(color) => send(pid, Command::SetColor(color))?,
-        ShellCommand::Restore => send(pid, Command::Restore)?,
-        ShellCommand::Detach => send(pid, Command::Detach)?,
+        ShellCommand::Color(color) => send(taskbar.pid, Command::SetColor(color))?,
+        ShellCommand::Restore => send(taskbar.pid, Command::Restore)?,
+        ShellCommand::Detach => send(taskbar.pid, Command::Detach)?,
     }
     Ok(())
 }
 
+fn report(attached: &Attached) {
+    if let Some((connection, hr)) = attached.remote_result {
+        println!(
+            "InitializeXamlDiagnosticsEx: VisualDiagConnection{connection} returned {:#010x}",
+            hr.0
+        );
+    }
+    match &attached.loaded {
+        Ok(Some(path)) => println!("DLL loaded in Explorer: yes ({})", path.display()),
+        Ok(None) => println!("DLL loaded in Explorer: no"),
+        Err(error) => println!("DLL loaded in Explorer: could not check ({error})"),
+    }
+    if attached.ready {
+        println!(
+            "attached: the DLL is watching a XAML thread's visual tree. {LOG_HINT} says \
+             whether it found the taskbar; if not, detach and try `--from <next number>`"
+        );
+    } else {
+        println!("the DLL did not report back; see {LOG_HINT}");
+    }
+}
+
 fn send(pid: u32, command: Command) -> Result<()> {
     let windows = shell_hook::send(pid, command)?;
-    println!("sent to {windows} XAML thread(s) in Explorer; see hook.log for the result");
+    println!("sent to {windows} XAML thread(s) in Explorer; see {LOG_HINT} for the result");
     Ok(())
 }

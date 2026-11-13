@@ -11,11 +11,36 @@ fn apply(args: &[&str]) -> Result<ApplyOptions, CliError> {
 fn shell_commands_parse() {
     assert_eq!(
         parse(&["shell", "attach"]),
-        Ok(Command::Shell(ShellCommand::Attach { from: 1 }))
+        Ok(Command::Shell(ShellCommand::Attach {
+            from: 1,
+            remote: false
+        }))
     );
     assert_eq!(
         parse(&["shell", "attach", "--from", "3"]),
-        Ok(Command::Shell(ShellCommand::Attach { from: 3 }))
+        Ok(Command::Shell(ShellCommand::Attach {
+            from: 3,
+            remote: false
+        }))
+    );
+    assert_eq!(
+        parse(&["shell", "attach", "--remote", "--from", "2"]),
+        Ok(Command::Shell(ShellCommand::Attach {
+            from: 2,
+            remote: true
+        }))
+    );
+    assert_eq!(
+        parse(&["shell", "attach", "--remote", "--remote"]),
+        Err(CliError::Repeated("--remote"))
+    );
+    assert_eq!(
+        parse(&["shell", "attach", "--from", "2", "--from", "3"]),
+        Err(CliError::Repeated("--from"))
+    );
+    assert_eq!(
+        parse(&["shell", "attach", "--from"]),
+        Err(CliError::MissingValue("--from"))
     );
     assert_eq!(
         parse(&["shell", "color", "1a2b3c"]),

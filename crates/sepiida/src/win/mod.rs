@@ -4,6 +4,7 @@
 pub mod desktop;
 pub mod desktop_events;
 pub mod message_box;
+pub mod modules;
 pub mod registry;
 pub mod shell_hook;
 pub mod single_instance;

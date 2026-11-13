@@ -59,13 +59,17 @@ runs per user session. It logs to `%LOCALAPPDATA%\sepiida\logs\sepiida.log`.
 
 ```
 sepiida shell attach [--from N]  load sepiida_hook.dll into Explorer and watch the taskbar
+                       [--remote]
 sepiida shell color 336699       paint the taskbar background in this colour (# optional)
 sepiida shell restore            put the original taskbar background back
 sepiida shell detach             restore and stop watching
 ```
 
-`attach` uses the XAML Diagnostics API to load `sepiida_hook.dll` (from the
-folder `sepiida.exe` is in) into Explorer. Windows keeps that DLL loaded until
+`attach` loads `sepiida_hook.dll` (from the folder `sepiida.exe` is in) into
+Explorer with a hook on the taskbar's thread, and the DLL then attaches to
+the taskbar through the XAML Diagnostics API. `--remote` makes the XAML
+Diagnostics request from `sepiida.exe` instead. `attach` reports whether the
+DLL is loaded in Explorer and whether it confirmed it is watching. Windows keeps that DLL loaded until
 Explorer restarts, even after `detach`, so the file cannot be replaced while
 Explorer runs: restart Explorer first, or use a new folder. If anything goes
 wrong, restarting Explorer brings back the stock taskbar. The DLL logs to

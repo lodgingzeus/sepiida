@@ -40,7 +40,11 @@ impl IClassFactory_Impl for Factory_Impl {
                 }
                 let tap: IObjectWithSite = Tap::default().into();
                 // SAFETY: `iid` and `out` are valid, checked above.
-                unsafe { tap.query(iid, out) }.ok()
+                let hr = unsafe { tap.query(iid, out) };
+                // SAFETY: checked non-null above.
+                let iid = unsafe { *iid };
+                log!("TAP object created for iid {iid:?}: {:#010x}", hr.0);
+                hr.ok()
             },
         )
     }
@@ -60,6 +64,7 @@ impl IObjectWithSite_Impl for Tap_Impl {
     fn SetSite(&self, site: Ref<IUnknown>) -> Result<()> {
         guard("IObjectWithSite::SetSite", Err(E_UNEXPECTED.into()), || {
             let site = site.cloned();
+            log!("SetSite({})", if site.is_some() { "site" } else { "null" });
             let result = match &site {
                 Some(site) => session::attach(site),
                 None => {

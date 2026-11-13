@@ -1,40 +1,52 @@
-//! Loads the styling DLL into Explorer through XAML Diagnostics and sends it
-//! commands.
+//! Gets the styling DLL attached inside Explorer and sends it commands.
 //!
-//! `InitializeXamlDiagnosticsEx` (exported by `Windows.UI.Xaml.dll`) posts
-//! to a diagnostics port of the target process; XAML there loads our DLL by
-//! path and calls its `DllGetClassObject`. Each XAML thread has its own
-//! port, `VisualDiagConnection<N>`, with N unknown in advance, so the names
-//! are tried in order until one is not "not found". XAML only accepts one
-//! initialisation per calling thread, so each attempt gets a fresh thread.
+//! The XAML Diagnostics call itself lives in the DLL (see its `inject`
+//! module), so both ways of attaching use the same code. sepiida.exe loads
+//! the DLL into itself and either:
+//! - in-process (default, TranslucentTB's current method): installs the
+//!   DLL's `WH_CALLWNDPROC` hook on the taskbar's thread only, which maps the
+//!   DLL into Explorer, and sends the taskbar window the attach message; the
+//!   DLL then attaches from inside Explorer; or
+//! - remote: calls the DLL's export with Explorer's pid, so the XAML
+//!   Diagnostics request comes from sepiida.exe.
+//!
+//! Either way the DLL sets a named event once it watches the visual tree.
 
 use std::{
     path::{Path, PathBuf},
-    thread,
     time::Duration,
 };
 
 use sepiida_core::shell::protocol::{
-    CONTROL_WINDOW_CLASS, Command, TAP_CLSID, connection_names, ready_event_name,
+    ATTACH_MESSAGE, CONTROL_WINDOW_CLASS, Command, HOOK_PROC_EXPORT, INITIALIZE_EXPORT,
+    ready_event_name,
 };
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, ERROR_NOT_FOUND, HANDLE, HWND, LPARAM, WAIT_OBJECT_0, WPARAM},
+        Foundation::{
+            CloseHandle, ERROR_NOT_FOUND, FreeLibrary, HANDLE, HINSTANCE, HMODULE, HWND, LPARAM,
+            WAIT_OBJECT_0, WPARAM,
+        },
         System::{
-            LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
+            LibraryLoader::{GetProcAddress, LOAD_LIBRARY_FLAGS, LoadLibraryExW},
             Threading::{CreateEventW, WaitForSingleObject},
         },
         UI::WindowsAndMessaging::{
-            FindWindowExW, FindWindowW, GetWindowThreadProcessId, HWND_MESSAGE, PostMessageW,
+            FindWindowExW, FindWindowW, GetWindowThreadProcessId, HOOKPROC, HWND_MESSAGE,
+            PostMessageW, RegisterWindowMessageW, SendNotifyMessageW, SetWindowsHookExW,
+            UnhookWindowsHookEx, WH_CALLWNDPROC,
         },
     },
-    core::{GUID, HRESULT, HSTRING, PCWSTR, s, w},
+    core::{HRESULT, HSTRING, PCSTR, PCWSTR, w},
 };
+
+use super::modules;
 
 /// The DLL's file name, next to the executables.
 pub const HOOK_DLL: &str = "sepiida_hook.dll";
 /// How long `attach` waits for the DLL to report that it is watching.
-const READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Trying many connection numbers from inside Explorer takes a while.
+const READY_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ShellHookError {
@@ -44,12 +56,18 @@ pub enum ShellHookError {
     MissingDll(PathBuf),
     #[error("could not locate sepiida.exe")]
     OwnPath(#[source] std::io::Error),
-    #[error("Windows.UI.Xaml.dll or InitializeXamlDiagnosticsEx is not available")]
-    NoXamlDiagnostics(#[source] windows::core::Error),
-    #[error("no XAML diagnostics port answered in Explorer (tried {0})")]
-    NoConnection(u32),
-    #[error("XAML Diagnostics refused to load the DLL through {connection}: {hr}")]
-    Refused { connection: String, hr: HRESULT },
+    #[error("could not load {0}")]
+    LoadDll(PathBuf, #[source] windows::core::Error),
+    #[error("{0} does not export {1}; is it from the same build as sepiida.exe?")]
+    MissingExport(PathBuf, &'static str),
+    #[error("could not install the hook on the taskbar thread")]
+    Hook(#[source] windows::core::Error),
+    #[error("could not send the attach message to the taskbar")]
+    Trigger(#[source] windows::core::Error),
+    #[error("no XAML diagnostics port answered in Explorer")]
+    NoConnection,
+    #[error("XAML Diagnostics refused through VisualDiagConnection{connection}: {hr}")]
+    Refused { connection: u32, hr: HRESULT },
     #[error("could not create the ready event")]
     Event(#[source] windows::core::Error),
     #[error("the styling DLL is not attached; run `sepiida shell attach` first")]
@@ -58,32 +76,51 @@ pub enum ShellHookError {
     Post(#[source] windows::core::Error),
 }
 
-pub struct Attached {
-    pub connection: String,
-    /// Whether the DLL confirmed it is watching the visual tree.
-    pub ready: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    InProcess,
+    Remote,
 }
 
-type InitializeXamlDiagnosticsEx =
-    unsafe extern "system" fn(PCWSTR, u32, PCWSTR, PCWSTR, GUID, PCWSTR) -> HRESULT;
+pub struct Attached {
+    /// Remote only: the connection number that answered and its result.
+    pub remote_result: Option<(u32, HRESULT)>,
+    /// Whether the DLL confirmed it is watching the visual tree.
+    pub ready: bool,
+    /// Where Explorer has the DLL loaded from, if it has; or why that
+    /// could not be checked.
+    pub loaded: Result<Option<PathBuf>, windows::core::Error>,
+}
 
-/// Process ID of the Explorer that owns the taskbar.
-pub fn explorer_pid() -> Result<u32, ShellHookError> {
+type InitializeExport = unsafe extern "system" fn(u32, u32, *mut u32) -> HRESULT;
+
+/// The taskbar window, and the process and thread that own it.
+pub struct Taskbar {
+    window: HWND,
+    pub pid: u32,
+    thread: u32,
+}
+
+pub fn taskbar() -> Result<Taskbar, ShellHookError> {
     // SAFETY: plain Win32 calls with valid arguments.
     unsafe {
-        let taskbar = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null())
+        let window = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null())
             .map_err(|_| ShellHookError::NoExplorer)?;
         let mut pid = 0;
-        GetWindowThreadProcessId(taskbar, Some(&mut pid));
-        if pid == 0 {
+        let thread = GetWindowThreadProcessId(window, Some(&mut pid));
+        if pid == 0 || thread == 0 {
             return Err(ShellHookError::NoExplorer);
         }
-        Ok(pid)
+        Ok(Taskbar {
+            window,
+            pid,
+            thread,
+        })
     }
 }
 
 /// The hook DLL next to the running executable. Only that file is ever
-/// handed to Explorer.
+/// loaded or handed to Explorer.
 pub fn hook_dll_path() -> Result<PathBuf, ShellHookError> {
     let exe = std::env::current_exe().map_err(ShellHookError::OwnPath)?;
     let dll = exe.with_file_name(HOOK_DLL);
@@ -94,80 +131,92 @@ pub fn hook_dll_path() -> Result<PathBuf, ShellHookError> {
     }
 }
 
-/// Asks Explorer's XAML to load the DLL, trying connection numbers from
-/// `from` on, then waits for the DLL to confirm.
-pub fn attach(pid: u32, dll: &Path, from: u32) -> Result<Attached, ShellHookError> {
-    let ready = ReadyEvent::create(pid)?;
-    let initialize = load_initialize()?;
-    let dll = HSTRING::from(dll.as_os_str());
-    let not_found = ERROR_NOT_FOUND.to_hresult();
-    let mut tried = 0;
-    for (_, connection) in connection_names().skip_while(|(n, _)| *n < from) {
-        tried += 1;
-        let hr = call_on_fresh_thread(initialize, &connection, pid, &dll);
-        if hr == not_found {
-            continue;
+/// Attaches the DLL inside Explorer, trying connection numbers from `from`
+/// on, and waits for it to confirm.
+pub fn attach(
+    taskbar: &Taskbar,
+    dll: &Path,
+    from: u32,
+    method: Method,
+) -> Result<Attached, ShellHookError> {
+    let ready = ReadyEvent::create(taskbar.pid)?;
+    let library = Library::load(dll)?;
+    let (remote_result, ready) = match method {
+        Method::InProcess => (None, attach_in_process(taskbar, &library, from, &ready)?),
+        Method::Remote => {
+            let result = attach_remote(taskbar.pid, &library, from)?;
+            (Some(result), ready.wait(READY_TIMEOUT))
         }
-        if hr.is_err() {
-            return Err(ShellHookError::Refused { connection, hr });
-        }
-        return Ok(Attached {
-            connection,
-            ready: ready.wait(READY_TIMEOUT),
-        });
-    }
-    Err(ShellHookError::NoConnection(tried))
-}
-
-fn load_initialize() -> Result<InitializeXamlDiagnosticsEx, ShellHookError> {
-    // SAFETY: loads a system DLL from System32 only. It stays loaded for the
-    // life of this short-lived process.
-    unsafe {
-        let module = LoadLibraryExW(
-            w!("Windows.UI.Xaml.dll"),
-            None,
-            LOAD_LIBRARY_SEARCH_SYSTEM32,
-        )
-        .map_err(ShellHookError::NoXamlDiagnostics)?;
-        let proc = GetProcAddress(module, s!("InitializeXamlDiagnosticsEx")).ok_or_else(|| {
-            ShellHookError::NoXamlDiagnostics(windows::core::Error::from_thread())
-        })?;
-        // SAFETY: the documented signature of this export (xamlom.h).
-        Ok(std::mem::transmute::<
-            unsafe extern "system" fn() -> isize,
-            InitializeXamlDiagnosticsEx,
-        >(proc))
-    }
-}
-
-fn call_on_fresh_thread(
-    initialize: InitializeXamlDiagnosticsEx,
-    connection: &str,
-    pid: u32,
-    dll: &HSTRING,
-) -> HRESULT {
-    let connection = HSTRING::from(connection);
-    let clsid = GUID::from_u128(TAP_CLSID);
-    thread::scope(|scope| {
-        scope
-            .spawn(|| {
-                // SAFETY: all strings outlive the call; a null path selects
-                // the system's XamlDiagnostics.dll, a null initialisation
-                // string passes no data.
-                unsafe {
-                    initialize(
-                        PCWSTR(connection.as_ptr()),
-                        pid,
-                        PCWSTR::null(),
-                        PCWSTR(dll.as_ptr()),
-                        clsid,
-                        PCWSTR::null(),
-                    )
-                }
-            })
-            .join()
-            .unwrap_or(windows::Win32::Foundation::E_UNEXPECTED)
+    };
+    Ok(Attached {
+        remote_result,
+        ready,
+        loaded: modules::loaded_module(taskbar.pid, HOOK_DLL),
     })
+}
+
+fn attach_in_process(
+    taskbar: &Taskbar,
+    library: &Library,
+    from: u32,
+    ready: &ReadyEvent,
+) -> Result<bool, ShellHookError> {
+    let proc = library.export(HOOK_PROC_EXPORT)?;
+    // SAFETY: the export has the HOOKPROC signature (see the DLL's
+    // `SepiidaCallWndProc`).
+    let proc: HOOKPROC = Some(unsafe {
+        std::mem::transmute::<
+            unsafe extern "system" fn() -> isize,
+            unsafe extern "system" fn(i32, WPARAM, LPARAM) -> windows::Win32::Foundation::LRESULT,
+        >(proc)
+    });
+    // SAFETY: the hook is scoped to the taskbar's thread only (never 0,
+    // which would load the DLL into every process on the desktop), and is
+    // removed before returning.
+    let hook = unsafe {
+        SetWindowsHookExW(
+            WH_CALLWNDPROC,
+            proc,
+            Some(HINSTANCE(library.0.0)),
+            taskbar.thread,
+        )
+    }
+    .map_err(ShellHookError::Hook)?;
+    let name = HSTRING::from(ATTACH_MESSAGE);
+    // SAFETY: plain Win32 calls; the message is ignored by the taskbar's own
+    // window procedure and only acted on by our hook.
+    let sent = unsafe {
+        let message = RegisterWindowMessageW(&name);
+        SendNotifyMessageW(taskbar.window, message, WPARAM(from as usize), LPARAM(0))
+    };
+    // The DLL pins itself inside Explorer before attaching, so the hook can
+    // go once the DLL has reported back (or given up).
+    let confirmed = sent.is_ok() && ready.wait(READY_TIMEOUT);
+    // SAFETY: the hook handle from above, removed once.
+    if let Err(error) = unsafe { UnhookWindowsHookEx(hook) } {
+        eprintln!("warning: could not remove the hook: {error}");
+    }
+    sent.map_err(ShellHookError::Trigger)?;
+    Ok(confirmed)
+}
+
+fn attach_remote(pid: u32, library: &Library, from: u32) -> Result<(u32, HRESULT), ShellHookError> {
+    let proc = library.export(INITIALIZE_EXPORT)?;
+    // SAFETY: the export's documented signature (see the DLL's
+    // `SepiidaInitializeXamlDiagnostics`).
+    let initialize = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, InitializeExport>(proc)
+    };
+    let mut connection = 0;
+    // SAFETY: `connection` is writable.
+    let hr = unsafe { initialize(pid, from, &mut connection) };
+    if hr == ERROR_NOT_FOUND.to_hresult() {
+        return Err(ShellHookError::NoConnection);
+    }
+    if hr.is_err() {
+        return Err(ShellHookError::Refused { connection, hr });
+    }
+    Ok((connection, hr))
 }
 
 /// Posts a command to every control window the DLL created in Explorer.
@@ -195,6 +244,39 @@ pub fn send(pid: u32, command: Command) -> Result<usize, ShellHookError> {
         return Err(ShellHookError::NotAttached);
     }
     Ok(sent)
+}
+
+/// The hook DLL loaded into sepiida.exe (its `DllMain` does nothing).
+struct Library(HMODULE, PathBuf);
+
+impl Library {
+    fn load(path: &Path) -> Result<Self, ShellHookError> {
+        let wide = HSTRING::from(path.as_os_str());
+        // SAFETY: a full path to our own DLL, checked to exist.
+        unsafe { LoadLibraryExW(&wide, None, LOAD_LIBRARY_FLAGS(0)) }
+            .map(|module| Self(module, path.to_owned()))
+            .map_err(|e| ShellHookError::LoadDll(path.to_owned(), e))
+    }
+
+    fn export(
+        &self,
+        name: &'static str,
+    ) -> Result<unsafe extern "system" fn() -> isize, ShellHookError> {
+        let c_name = format!("{name}\0");
+        // SAFETY: a NUL-terminated ASCII name; the module is loaded.
+        unsafe { GetProcAddress(self.0, PCSTR(c_name.as_ptr())) }
+            .ok_or_else(|| ShellHookError::MissingExport(self.1.clone(), name))
+    }
+}
+
+impl Drop for Library {
+    fn drop(&mut self) {
+        // SAFETY: loaded once in `load`, freed once. No hook from it is left
+        // installed by then.
+        unsafe {
+            let _ = FreeLibrary(self.0);
+        }
+    }
 }
 
 /// `Local\sepiida-hook-ready-<pid>`, set by the DLL once attached.

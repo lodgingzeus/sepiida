@@ -24,10 +24,21 @@ pub const CONNECTION_PREFIX: &str = "VisualDiagConnection";
 /// threads; the taskbar's is among the first.
 pub const MAX_CONNECTION: u32 = 256;
 
-/// Every connection name to try, in order.
-pub fn connection_names() -> impl Iterator<Item = (u32, String)> {
-    (1..=MAX_CONNECTION).map(|n| (n, format!("{CONNECTION_PREFIX}{n}")))
+/// Every connection name to try from number `from` on, in order. A `from`
+/// of 0 counts as 1.
+pub fn connection_names(from: u32) -> impl Iterator<Item = (u32, String)> {
+    (from.max(1)..=MAX_CONNECTION).map(|n| (n, format!("{CONNECTION_PREFIX}{n}")))
 }
+
+/// DLL export that calls `InitializeXamlDiagnosticsEx` for a process:
+/// `extern "system" fn(pid: u32, from: u32, connection: *mut u32) -> HRESULT`.
+pub const INITIALIZE_EXPORT: &str = "SepiidaInitializeXamlDiagnostics";
+/// DLL export used as a `WH_CALLWNDPROC` hook procedure on the taskbar's
+/// thread, to start the in-process attach.
+pub const HOOK_PROC_EXPORT: &str = "SepiidaCallWndProc";
+/// Registered window message sent to the taskbar window to trigger the
+/// in-process attach; `wParam` is the first connection number to try.
+pub const ATTACH_MESSAGE: &str = "sepiida.hook.attach";
 
 /// Named event the DLL sets once it is watching the visual tree. Per
 /// session (`Local\`) and per target process.
@@ -132,9 +143,15 @@ mod tests {
 
     #[test]
     fn connection_names_count_from_one() {
-        let names: Vec<_> = connection_names().collect();
+        let names: Vec<_> = connection_names(1).collect();
         assert_eq!(names.len(), MAX_CONNECTION as usize);
         assert_eq!(names[0], (1, "VisualDiagConnection1".to_owned()));
+        assert_eq!(
+            connection_names(0).next(),
+            Some((1, "VisualDiagConnection1".to_owned()))
+        );
+        assert_eq!(connection_names(5).next().map(|(n, _)| n), Some(5));
+        assert_eq!(connection_names(MAX_CONNECTION + 1).count(), 0);
         assert_eq!(names.last().map(|(n, _)| *n), Some(MAX_CONNECTION));
     }
 

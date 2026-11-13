@@ -15,7 +15,11 @@
 #[cfg(windows)]
 mod control;
 #[cfg(windows)]
+mod inject;
+#[cfg(windows)]
 mod log;
+#[cfg(windows)]
+mod module;
 #[cfg(windows)]
 mod session;
 #[cfg(windows)]
@@ -71,7 +75,7 @@ mod exports {
         core::{GUID, HRESULT, Interface},
     };
 
-    use crate::{guard, tap::Factory};
+    use crate::{guard, log::log, tap::Factory};
 
     #[unsafe(no_mangle)]
     pub extern "system" fn DllMain(
@@ -99,14 +103,22 @@ mod exports {
                 return E_POINTER;
             }
             // SAFETY: checked non-null above; the caller passes valid pointers.
-            unsafe {
+            let hr = unsafe {
                 *out = core::ptr::null_mut();
                 if *clsid != GUID::from_u128(sepiida_core::shell::protocol::TAP_CLSID) {
-                    return CLASS_E_CLASSNOTAVAILABLE;
+                    CLASS_E_CLASSNOTAVAILABLE
+                } else {
+                    let factory: IClassFactory = Factory.into();
+                    factory.query(iid, out)
                 }
-                let factory: IClassFactory = Factory.into();
-                factory.query(iid, out)
-            }
+            };
+            // SAFETY: checked non-null above.
+            let (clsid, iid) = unsafe { (*clsid, *iid) };
+            log!(
+                "DllGetClassObject(clsid {clsid:?}, iid {iid:?}) = {:#010x}",
+                hr.0
+            );
+            hr
         })
     }
 

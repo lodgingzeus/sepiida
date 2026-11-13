@@ -12,10 +12,6 @@ use sepiida_core::shell::protocol::{CONTROL_WINDOW_CLASS, Command};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
-        System::LibraryLoader::{
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            GetModuleHandleExW,
-        },
         UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_MESSAGE, RegisterClassExW,
             WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW,
@@ -24,31 +20,10 @@ use windows::{
     core::{HSTRING, PCWSTR},
 };
 
-use crate::{guard, log::log, watcher};
+use crate::{guard, log::log, module, watcher};
 
 thread_local! {
     static WINDOW: Cell<Option<HWND>> = const { Cell::new(None) };
-}
-
-/// This DLL's module handle, which owns the window class.
-fn module() -> Option<HINSTANCE> {
-    let mut module = Default::default();
-    // SAFETY: the address is a function in this DLL; the refcount is left
-    // unchanged, and this DLL is never unloaded.
-    let found = unsafe {
-        GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            PCWSTR(window_proc as *const u16),
-            &mut module,
-        )
-    };
-    match found {
-        Ok(()) => Some(module.into()),
-        Err(error) => {
-            log!("GetModuleHandleExW failed: {error}");
-            None
-        }
-    }
 }
 
 /// Creates this thread's control window unless it exists.
@@ -56,7 +31,7 @@ pub fn ensure_window() {
     if WINDOW.with(Cell::get).is_some() {
         return;
     }
-    let Some(instance) = module() else {
+    let Some(instance) = module::this_module().map(HINSTANCE::from) else {
         return;
     };
     let class = HSTRING::from(CONTROL_WINDOW_CLASS);

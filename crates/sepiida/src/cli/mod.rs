@@ -26,8 +26,10 @@ apply options:
 wallpaper, and nothing is written for features that are turned off.
 
 shell commands (experimental):
-  attach [--from N]  load the styling DLL into Explorer; --from tries
-                     VisualDiagConnectionN onwards (default 1)
+  attach [--from N] [--remote]
+                     load the styling DLL into Explorer; --from tries
+                     VisualDiagConnectionN onwards (default 1); --remote
+                     asks from sepiida.exe instead of from inside Explorer
   color <rrggbb>     paint the taskbar background in this colour (`#` optional;
                      PowerShell needs quotes around a leading `#`)
   restore            put the original taskbar background back
@@ -47,9 +49,11 @@ pub enum Command {
 /// `sepiida shell …`: drives the styling DLL inside Explorer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellCommand {
-    /// Try diagnostics connections from this number on.
+    /// Try diagnostics connections from this number on; `remote` makes the
+    /// request from sepiida.exe instead of from inside Explorer.
     Attach {
         from: u32,
+        remote: bool,
     },
     Color(Color),
     Restore,
@@ -111,7 +115,7 @@ pub enum CliError {
     Repeated(&'static str),
     #[error("{0}")]
     InvalidValue(String),
-    #[error("`shell` takes one of: attach [--from N], color <rrggbb>, restore, detach")]
+    #[error("`shell` takes one of: attach [--from N] [--remote], color <rrggbb>, restore, detach")]
     ShellArguments,
 }
 
@@ -138,15 +142,41 @@ pub fn parse<S: AsRef<str>>(args: &[S]) -> Result<Command, CliError> {
     }
 }
 
+fn parse_attach(args: &[&str]) -> Result<ShellCommand, CliError> {
+    let mut from = None;
+    let mut remote = false;
+    let mut args = args.iter().copied();
+    while let Some(arg) = args.next() {
+        match arg {
+            "--from" => {
+                let value = args.next().ok_or(CliError::MissingValue("--from"))?;
+                let parsed = value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|n| (1..=MAX_CONNECTION).contains(n))
+                    .ok_or_else(|| {
+                        CliError::InvalidValue(format!(
+                            "--from takes a number from 1 to {MAX_CONNECTION}"
+                        ))
+                    })?;
+                if from.replace(parsed).is_some() {
+                    return Err(CliError::Repeated("--from"));
+                }
+            }
+            "--remote" if !remote => remote = true,
+            "--remote" => return Err(CliError::Repeated("--remote")),
+            _ => return Err(CliError::ShellArguments),
+        }
+    }
+    Ok(ShellCommand::Attach {
+        from: from.unwrap_or(1),
+        remote,
+    })
+}
+
 fn parse_shell(args: &[&str]) -> Result<ShellCommand, CliError> {
     match args {
-        ["attach"] => Ok(ShellCommand::Attach { from: 1 }),
-        ["attach", "--from", n] => match n.parse::<u32>() {
-            Ok(from) if (1..=MAX_CONNECTION).contains(&from) => Ok(ShellCommand::Attach { from }),
-            _ => Err(CliError::InvalidValue(format!(
-                "--from takes a number from 1 to {MAX_CONNECTION}"
-            ))),
-        },
+        ["attach", options @ ..] => parse_attach(options),
         ["color", value] => {
             // PowerShell drops an unquoted argument starting with `#` as a
             // comment, so the `#` is optional.
