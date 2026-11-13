@@ -22,6 +22,7 @@ use windows::{
 use sepiida_core::shell::{hosts::AttachMode, protocol};
 
 use crate::{
+    dump,
     log::log,
     watcher::Watcher,
     xamlom::{IVisualTreeService3, IVisualTreeServiceCallback2, IXamlDiagnostics},
@@ -63,8 +64,9 @@ pub fn attach(site: &IUnknown) -> Result<()> {
     let mode = attach_mode(&diagnostics);
     // Styling has one attachment; dump attachments (one per XAML core)
     // run side by side and are stopped together (see `dump`).
-    if mode == AttachMode::Style {
-        detach();
+    match mode {
+        AttachMode::Style => detach(),
+        AttachMode::Dump => dump::started(),
     }
 
     let generation = GENERATION.fetch_add(1, Ordering::AcqRel) + 1;

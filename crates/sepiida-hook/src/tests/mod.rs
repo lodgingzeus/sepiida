@@ -299,6 +299,18 @@ fn dump_mode_logs_the_tree_and_styles_nothing() {
     // Stopping ends the dump and removes this thread's control window.
     send(Command::Detach);
     assert!(control_window().is_none());
+
+    // A new dump round after a stop dumps again (a fresh attachment).
+    let (again, site) = new_fake();
+    *again.init_data.lock().unwrap() = Some("sepiida:dump".into());
+    let tap = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap.SetSite(&site) }.unwrap();
+    let callback = wait_for_callback(&again);
+    add_taskbar(&callback);
+    assert!(control_window().is_some());
+    send(Command::Detach);
+    assert!(control_window().is_none());
 }
 
 #[test]

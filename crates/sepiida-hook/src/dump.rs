@@ -54,6 +54,13 @@ pub fn on_change(
     }
 }
 
+/// A dump attachment is starting: dumping runs again, with a fresh count,
+/// even after an earlier `sepiida shell dump stop`.
+pub fn started() {
+    DUMPED.store(0, Ordering::Release);
+    STOPPED.store(false, Ordering::Release);
+}
+
 /// Stops every dumping attachment in this process.
 pub fn stop() {
     if !STOPPED.swap(true, Ordering::AcqRel) {
