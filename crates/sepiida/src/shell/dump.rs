@@ -118,20 +118,40 @@ fn collect() -> Result<()> {
     Ok(())
 }
 
-/// `(package folder name, log path)` for every package whose AppContainer
-/// temp folder holds a DLL log.
+/// `(name, log path)` for every DLL log inside a package's AppContainer
+/// folder. Inside an AppContainer `%LOCALAPPDATA%` may already point at
+/// that folder, so the DLL's paths can end up nested in it; each place it
+/// can write to is checked (no directory walk).
 fn find_dump_logs(packages: &Path) -> Vec<(String, PathBuf)> {
     let Ok(entries) = fs::read_dir(packages) else {
         return Vec::new();
     };
-    let mut found: Vec<(String, PathBuf)> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let log = entry.path().join("AC").join("Temp").join(FALLBACK_LOG_FILE);
-            let package = entry.file_name().to_str()?.to_owned();
-            log.is_file().then_some((package, log))
-        })
-        .collect();
+    let mut found = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let Some(package) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let ac = entry.path().join("AC");
+        let candidates = [
+            ac.join("Temp").join(FALLBACK_LOG_FILE),
+            ac.join("sepiida").join("logs").join("hook.log"),
+            ac.join("Packages")
+                .join(&package)
+                .join("AC")
+                .join("Temp")
+                .join(FALLBACK_LOG_FILE),
+        ];
+        for (n, log) in candidates.into_iter().enumerate() {
+            if log.is_file() {
+                let name = if n == 0 {
+                    package.clone()
+                } else {
+                    format!("{package}-{n}")
+                };
+                found.push((name, log));
+            }
+        }
+    }
     found.sort();
     found
 }
