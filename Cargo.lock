@@ -3729,6 +3729,11 @@ dependencies = [
 [[package]]
 name = "sepiida-hook"
 version = "0.1.0-alpha.0"
+dependencies = [
+ "sepiida-core",
+ "windows",
+ "windows-core",
+]
 
 [[package]]
 name = "serde"

@@ -26,13 +26,18 @@ notify = "8"
 directories = "6"
 slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "system-tray"] }
 slint-build = "1.18"
+windows-core = "0.62"
 windows = { version = "0.62", features = [
+    "UI",
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_System_Com",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
     "Win32_System_Registry",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
