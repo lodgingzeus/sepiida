@@ -75,6 +75,22 @@ impl AttachMode {
     }
 }
 
+/// Longest package family name Windows allows (`PACKAGE_FAMILY_NAME_MAX_LENGTH`).
+pub const MAX_PACKAGE_FAMILY_NAME: usize = 64;
+
+/// Whether `name` looks like a package family name (`Name_PublisherId`):
+/// letters, digits, `.`, `-` and `_` only, so it is safe as one path
+/// component of `%LOCALAPPDATA%\Packages\<name>`.
+pub fn is_package_family_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_PACKAGE_FAMILY_NAME
+        && name.contains('_')
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
 /// Whether `name` is one of the sandboxed hosts (case-insensitive, as
 /// Windows file names are).
 pub fn is_sandboxed_host(name: &str) -> bool {
@@ -108,6 +124,24 @@ mod tests {
             AttachMode::from_init_data("sepiida:dump "),
             AttachMode::Style
         );
+    }
+
+    #[test]
+    fn package_family_names_are_validated() {
+        assert!(is_package_family_name(
+            "Microsoft.Windows.ShellExperienceHost_cw5n1h2txyewy"
+        ));
+        for bad in [
+            "",
+            "NoPublisher",
+            "..\\evil_x",
+            "a/b_c",
+            "..._x",
+            "with space_x",
+            &"a".repeat(MAX_PACKAGE_FAMILY_NAME + 1),
+        ] {
+            assert!(!is_package_family_name(bad), "{bad:?}");
+        }
     }
 
     #[test]

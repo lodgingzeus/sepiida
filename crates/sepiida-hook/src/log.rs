@@ -16,14 +16,18 @@ use std::{
     sync::Mutex,
 };
 
-use sepiida_core::shell::hosts::FALLBACK_LOG_FILE;
+use sepiida_core::shell::hosts::{
+    FALLBACK_LOG_FILE, MAX_PACKAGE_FAMILY_NAME, is_package_family_name,
+};
 use windows::Win32::{
-    Storage::FileSystem::GetTempPathW,
+    Foundation::ERROR_SUCCESS,
+    Storage::{FileSystem::GetTempPathW, Packaging::Appx::GetCurrentPackageFamilyName},
     System::{
         SystemInformation::GetLocalTime,
         Threading::{GetCurrentProcessId, GetCurrentThreadId},
     },
 };
+use windows::core::PWSTR;
 
 const LOG_FILE: &str = "hook.log";
 const OLD_LOG_FILE: &str = "hook.old.log";
@@ -39,7 +43,31 @@ fn log_dir() -> Option<PathBuf> {
         .then(|| base.join("sepiida").join("logs"))
 }
 
-/// This process's temp folder; in an AppContainer, the package's own.
+/// The package's own temp folder, `%LOCALAPPDATA%\Packages\<family>\AC\Temp`,
+/// when this process belongs to a package: the one place an AppContainer
+/// process can always write. `GetTempPathW` there may name the user's temp
+/// folder (inherited environment), which it cannot write.
+fn package_temp_dir() -> Option<PathBuf> {
+    let mut buffer = [0u16; MAX_PACKAGE_FAMILY_NAME + 1];
+    let mut len = buffer.len() as u32;
+    // SAFETY: `len` holds the buffer's length in characters; the buffer is
+    // writable for all of it.
+    let status = unsafe { GetCurrentPackageFamilyName(&mut len, Some(PWSTR(buffer.as_mut_ptr()))) };
+    if status != ERROR_SUCCESS {
+        return None; // Not packaged, or no room.
+    }
+    let len = (len as usize).saturating_sub(1).min(buffer.len());
+    let family = String::from_utf16(&buffer[..len]).ok()?;
+    if !is_package_family_name(&family) {
+        return None;
+    }
+    let local = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
+    local
+        .is_absolute()
+        .then(|| local.join("Packages").join(family).join("AC").join("Temp"))
+}
+
+/// This process's temp folder.
 fn temp_dir() -> Option<PathBuf> {
     let mut buffer = [0u16; 512];
     // SAFETY: the buffer is writable for its whole length.
@@ -62,12 +90,11 @@ fn open_in(dir: &std::path::Path, file: &str, old_file: &str) -> Option<File> {
 }
 
 fn open() -> Option<File> {
+    let fallback = |dir: PathBuf| open_in(&dir, FALLBACK_LOG_FILE, "sepiida-hook.old.log");
     log_dir()
         .and_then(|dir| open_in(&dir, LOG_FILE, OLD_LOG_FILE))
-        .or_else(|| {
-            let dir = temp_dir()?;
-            open_in(&dir, FALLBACK_LOG_FILE, "sepiida-hook.old.log")
-        })
+        .or_else(|| package_temp_dir().and_then(fallback))
+        .or_else(|| temp_dir().and_then(fallback))
 }
 
 pub fn write(args: std::fmt::Arguments<'_>) {
