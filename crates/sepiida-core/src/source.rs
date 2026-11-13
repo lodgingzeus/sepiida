@@ -19,6 +19,15 @@ pub enum Wallpaper {
     Color(Color),
 }
 
+impl fmt::Display for Wallpaper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Image(path) => write!(f, "{}", path.display()),
+            Self::Color(color) => write!(f, "solid colour {color}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Windows,
@@ -333,6 +342,12 @@ mod tests {
         )
         .expect("resolved");
         assert_eq!(r.kind, SourceKind::Windows);
+    }
+
+    #[test]
+    fn wallpaper_prints_its_path_or_colour() {
+        assert_eq!(picture().to_string(), "picture.jpg");
+        assert_eq!(scene().to_string(), "solid colour #010203");
     }
 
     #[test]

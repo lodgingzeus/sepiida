@@ -29,13 +29,18 @@ use crate::{
     paths::Paths,
     tray,
     watch::{FileWatcher, MissingFolder},
-    win::{desktop_events, single_instance},
+    win::{desktop, desktop_events, single_instance},
 };
 
 /// Quiet time after the last notification before applying.
 const SETTLE: Duration = Duration::from_millis(500);
 /// Longest wait after the first notification of a burst.
 const MAX_DELAY: Duration = Duration::from_secs(3);
+/// At sign-in Wallpaper Engine usually starts a little after the agent and
+/// does not touch its `config.json` when it does, so the agent looks once
+/// more after this long. The one timer in the agent, approved as an
+/// exception to the event-only rule.
+const ENGINE_RECHECK: Duration = Duration::from_secs(45);
 
 pub fn run() -> Result<()> {
     let paths = Paths::locate()?;
@@ -90,7 +95,9 @@ pub fn run() -> Result<()> {
 /// The debounce loop. Runs on its own thread until it receives `Quit`.
 fn agent_loop(paths: Paths, receiver: &Receiver<Event>, events: Sender<Event>) -> Result<()> {
     let _settings_watcher = watch_files(vec![paths.config.clone()], events.clone())?;
+    let _wallpaper_watcher = watch_transcoded_wallpaper(events.clone());
     let mut engine = EngineWatch::start(paths.agent_state.clone(), events.clone());
+    recheck_for_engine_later(events.clone());
     // Theme from the current wallpaper straight away. `receiver` is alive,
     // so the send cannot fail.
     let _ = events.send(Event::ApplyNow);
@@ -124,8 +131,41 @@ fn agent_loop(paths: Paths, receiver: &Receiver<Event>, events: Sender<Event>) -
 
 fn watch_files(files: Vec<PathBuf>, events: Sender<Event>) -> Result<FileWatcher> {
     Ok(FileWatcher::new(files, MissingFolder::Create, move || {
+        info!(trigger = "settings file", "change noticed");
         let _ = events.send(Event::Changed);
     })?)
+}
+
+/// Windows rewrites this copy on every wallpaper change, which also covers
+/// changes that arrive without a broadcast. Optional: the folder is
+/// Windows' own, so it is never created, and the broadcast still works
+/// without it.
+fn watch_transcoded_wallpaper(events: Sender<Event>) -> Option<FileWatcher> {
+    let file = desktop::transcoded_wallpaper()?;
+    let watched = FileWatcher::new(vec![file], MissingFolder::Fail, move || {
+        info!(trigger = "wallpaper file", "change noticed");
+        let _ = events.send(Event::Changed);
+    });
+    match watched {
+        Ok(watcher) => Some(watcher),
+        Err(error) => {
+            warn!("{:#}", anyhow::Error::new(error));
+            None
+        }
+    }
+}
+
+fn recheck_for_engine_later(events: Sender<Event>) {
+    let spawned = thread::Builder::new()
+        .name("engine-recheck".to_owned())
+        .spawn(move || {
+            thread::sleep(ENGINE_RECHECK);
+            info!(trigger = "Wallpaper Engine recheck", "change noticed");
+            let _ = events.send(Event::Changed);
+        });
+    if let Err(error) = spawned {
+        warn!("could not schedule the Wallpaper Engine recheck: {error}");
+    }
 }
 
 struct Agent {
@@ -176,18 +216,21 @@ impl Agent {
         if let Some(error) = prepared.wallpaper_engine_error() {
             warn!("Wallpaper Engine could not be read, using the Windows wallpaper: {error}");
         }
-        let origin = match &prepared.origin {
-            Origin::Locked => "locked colour".to_owned(),
-            Origin::Wallpaper(resolved) => resolved.kind.to_string(),
+        let (origin, wallpaper) = match &prepared.origin {
+            Origin::Locked => ("locked colour".to_owned(), String::new()),
+            Origin::Wallpaper(resolved) => {
+                (resolved.kind.to_string(), resolved.wallpaper.to_string())
+            }
         };
         let accent = prepared.accent.map(|accent| accent.accent());
         if prepared.pending.is_empty() {
-            info!(%origin, source = %prepared.palette.source, "nothing to change");
+            info!(%origin, %wallpaper, source = %prepared.palette.source, "nothing to change");
             return Ok(accent);
         }
         apply::commit(&prepared, &self.paths.saved_theme)?;
         info!(
             %origin,
+            %wallpaper,
             source = %prepared.palette.source,
             values = prepared.pending.len(),
             "applied"

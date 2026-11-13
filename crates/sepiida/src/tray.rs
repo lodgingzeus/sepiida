@@ -7,7 +7,7 @@ use std::{cell::RefCell, sync::mpsc::Sender, time::Duration};
 use anyhow::Result;
 use sepiida_core::{Color, schedule::Event};
 use slint::{CloseRequestResponse, ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer, Timer};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     SettingsWindow, Tray,
@@ -15,6 +15,9 @@ use crate::{
     settings,
     tray_icon::{ICON_SIZE, NEUTRAL, dot_pixels},
 };
+
+/// When to add the icon again after an Explorer restart, besides at once.
+const TRAY_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(10)];
 
 thread_local! {
     static UI: RefCell<Option<Ui>> = const { RefCell::new(None) };
@@ -67,14 +70,34 @@ pub fn show_accent(accent: Color) {
 
 /// Adds the icon again after Explorer restarted, which forgets every tray
 /// icon. Callable from any thread.
+///
+/// Right after a restart the new taskbar may not accept icons yet, and
+/// Slint does not report a failed add, so the icon is added again a little
+/// later as well. A repeat that was not needed only replaces the icon.
 pub fn recreate_tray() {
     on_ui_thread(|ui| {
-        let paused = ui.tray.get_paused();
-        match build_tray(&ui.events, paused, ui.accent) {
-            Ok(tray) => ui.tray = tray,
-            Err(error) => warn!("could not add the tray icon again: {error:#}"),
+        rebuild_tray(ui);
+        for delay in TRAY_RETRY_DELAYS {
+            Timer::single_shot(delay, || {
+                UI.with_borrow_mut(|ui| {
+                    if let Some(ui) = ui {
+                        rebuild_tray(ui);
+                    }
+                });
+            });
         }
     });
+}
+
+fn rebuild_tray(ui: &mut Ui) {
+    let paused = ui.tray.get_paused();
+    match build_tray(&ui.events, paused, ui.accent) {
+        Ok(tray) => {
+            ui.tray = tray;
+            info!("tray icon added again");
+        }
+        Err(error) => warn!("could not add the tray icon again: {error:#}"),
+    }
 }
 
 fn on_ui_thread(work: impl FnOnce(&mut Ui) + Send + 'static) {

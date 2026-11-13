@@ -76,6 +76,7 @@ impl EngineWatch {
         if let Some(process_id) = actions.wait_for_exit {
             let events = self.events.clone();
             wallpaper_engine::wait_for_exit(process_id, move || {
+                info!(trigger = "Wallpaper Engine exited", "change noticed");
                 // In Auto mode the Windows wallpaper takes over.
                 let _ = events.send(Event::Changed);
             });
@@ -97,6 +98,7 @@ impl EngineWatch {
                 Err(_) => true,
             };
             if changed || current.is_none() {
+                info!(trigger = "Wallpaper Engine settings", "change noticed");
                 let _ = events.send(Event::Changed);
             }
         }) {

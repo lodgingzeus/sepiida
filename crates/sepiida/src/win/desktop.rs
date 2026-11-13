@@ -61,11 +61,16 @@ fn read_wallpaper() -> Result<Wallpaper, DesktopError> {
 
     // SAFETY: plain getter on a live interface.
     let background = from_colorref(unsafe { desktop.GetBackgroundColor()? }.0);
-    let transcoded = std::env::var_os("APPDATA")
-        .map(|appdata| PathBuf::from(appdata).join(TRANSCODED_WALLPAPER));
+    let transcoded = transcoded_wallpaper();
 
     windows_wallpaper(&reported, transcoded.as_deref(), background)
         .ok_or(DesktopError::MissingFile(reported))
+}
+
+/// The copy of the current wallpaper that Windows rewrites on every
+/// wallpaper change, including slideshow advances.
+pub fn transcoded_wallpaper() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|appdata| PathBuf::from(appdata).join(TRANSCODED_WALLPAPER))
 }
 
 /// With several monitors the shell is themed from the primary one, which is

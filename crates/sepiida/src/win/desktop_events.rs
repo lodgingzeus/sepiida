@@ -12,6 +12,7 @@ use std::{
 };
 
 use sepiida_core::schedule::Event;
+use tracing::info;
 use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, WPARAM},
@@ -155,9 +156,16 @@ extern "system" fn window_proc(
     LISTENER.with(|cell| {
         let Some(listener) = cell.get() else { return };
         if is_wallpaper_change(message, wparam) {
+            let trigger = if message == WM_DISPLAYCHANGE {
+                "display change"
+            } else {
+                "wallpaper broadcast"
+            };
+            info!(trigger, "change noticed");
             // The receiver only goes away when the agent is quitting.
             let _ = listener.sender.send(Event::Changed);
         } else if listener.taskbar_created != 0 && message == listener.taskbar_created {
+            info!("Explorer restarted; adding the tray icon again");
             (listener.on_taskbar_created)();
         }
     });
