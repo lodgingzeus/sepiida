@@ -40,7 +40,10 @@ use windows::{
     core::{HRESULT, HSTRING, PCSTR, PCWSTR, w},
 };
 
-use super::modules;
+use super::{
+    modules,
+    process_info::{self, Arch},
+};
 
 /// The DLL's file name, next to the executables.
 pub const HOOK_DLL: &str = "sepiida_hook.dll";
@@ -64,6 +67,12 @@ pub enum ShellHookError {
     Hook(#[source] windows::core::Error),
     #[error("could not send the attach message to the taskbar")]
     Trigger(#[source] windows::core::Error),
+    #[error(
+        "Explorer runs as {} but this build is {}: a DLL can only be loaded into a process \
+         of its own architecture. Use the sepiida-windows-{} build.",
+        explorer.artifact_suffix(), ours.artifact_suffix(), explorer.artifact_suffix()
+    )]
+    WrongArch { explorer: Arch, ours: Arch },
     #[error("no XAML diagnostics port answered in Explorer")]
     NoConnection,
     #[error("XAML Diagnostics refused through VisualDiagConnection{connection}: {hr}")]
@@ -145,6 +154,12 @@ pub fn attach(
     from: u32,
     method: Method,
 ) -> Result<Attached, ShellHookError> {
+    let ours = Arch::this_build();
+    if let Some(explorer) = process_info::process_arch(taskbar.pid)
+        && explorer != ours
+    {
+        return Err(ShellHookError::WrongArch { explorer, ours });
+    }
     let mut loaded_while_hooked = None;
     let ready = ReadyEvent::create(taskbar.pid)?;
     let library = Library::load(dll)?;

@@ -13,9 +13,30 @@ env:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    # Native builds for both Windows architectures. The hook DLL must match
+    # Explorer's architecture: on Windows on ARM, Explorer is ARM64 and
+    # cannot load an x64 DLL.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+      # The ARM image may not ship rustup; install it from rustup.rs if so.
+      - name: Install rustup if missing
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
+            .\rustup-init.exe -y --default-toolchain none --profile minimal
+            Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
+          }
       # rustup reads rust-toolchain.toml and installs the pinned toolchain.
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -25,7 +46,7 @@ jobs:
       - run: cargo build --workspace --release
       - uses: actions/upload-artifact@v7
         with:
-          name: sepiida-windows-x64
+          name: sepiida-windows-${{ matrix.arch }}
           if-no-files-found: error
           path: |
             target/release/sepiida.exe

@@ -105,6 +105,7 @@ nix develop
 cargo test --workspace
 cargo run -p sepiida -- palette path/to/image.png
 cargo xwin build --workspace --release --target x86_64-pc-windows-msvc
+cargo xwin build --workspace --release --target aarch64-pc-windows-msvc
 ```
 
 The first cross-build downloads the Microsoft CRT and Windows SDK through
@@ -112,8 +113,10 @@ The first cross-build downloads the Microsoft CRT and Windows SDK through
 
 On Windows, install Rust with `rustup` and run `cargo build --release`.
 
-Every push to `main` also builds a Windows artifact (`sepiida-windows-x64`) in
-GitHub Actions.
+Every push to `main` also builds Windows artifacts in GitHub Actions:
+`sepiida-windows-x64` and `sepiida-windows-arm64`. Use the one that matches
+your Windows: on Windows on ARM, Explorer runs as ARM64 and cannot load the
+x64 styling DLL (`sepiida shell attach` says so if they do not match).
 
 ## Licence
 
