@@ -14,7 +14,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use sepiida_core::{
-    Color,
+    Color, Palette,
     cache::PaletteCache,
     config::Config,
     schedule::{Event, Flow, Scheduler},
@@ -27,11 +27,12 @@ use crate::{
     gui::tray,
     logging,
     paths::Paths,
-    win::{desktop, desktop_events, single_instance},
+    win::{desktop, desktop_events, mode_watch, single_instance},
 };
 
 use super::{
     engine_watch::EngineWatch,
+    styling::{RETRIES_AFTER_RESTART, ShellStyling},
     watch::{FileWatcher, MissingFolder},
 };
 
@@ -61,7 +62,11 @@ pub fn run() -> Result<()> {
     let (events, receiver) = mpsc::channel();
     // The tray must exist before the event loop starts, on this thread.
     tray::start(events.clone(), paths.clone())?;
-    desktop_events::spawn(events.clone(), tray::recreate_tray)?;
+    let restart_events = events.clone();
+    desktop_events::spawn(events.clone(), move || {
+        tray::recreate_tray();
+        explorer_restarted(&restart_events);
+    })?;
 
     let worker_events = events.clone();
     let worker = thread::Builder::new()
@@ -101,13 +106,33 @@ fn agent_loop(paths: Paths, receiver: &Receiver<Event>, events: Sender<Event>) -
     let _wallpaper_watcher = watch_transcoded_wallpaper(events.clone());
     let mut engine = EngineWatch::start(paths.agent_state.clone(), events.clone());
     recheck_for_engine_later(events.clone());
+    watch_system_mode(events.clone());
     // Theme from the current wallpaper straight away. `receiver` is alive,
     // so the send cannot fail.
     let _ = events.send(Event::ApplyNow);
     drop(events);
 
-    let mut agent = Agent { paths, cache: None };
+    let styling = ShellStyling::new(paths.config.clone());
+    let mut agent = Agent {
+        paths,
+        cache: None,
+        styling,
+    };
     let mut scheduler = Scheduler::new(SETTLE, MAX_DELAY);
+    let result = run_loop(&mut agent, &mut scheduler, receiver, &mut engine);
+    // Taskbar styling does not outlive the agent.
+    if agent.styling.enabled() {
+        agent.styling.stop();
+    }
+    result
+}
+
+fn run_loop(
+    agent: &mut Agent,
+    scheduler: &mut Scheduler,
+    receiver: &Receiver<Event>,
+    engine: &mut EngineWatch,
+) -> Result<()> {
     loop {
         let event = match scheduler.deadline() {
             None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
@@ -115,6 +140,9 @@ fn agent_loop(paths: Paths, receiver: &Receiver<Event>, events: Sender<Event>) -
         };
         match event {
             Ok(event) => {
+                if event == Event::ExplorerRestarted {
+                    agent.styling.explorer_restarted(Instant::now());
+                }
                 if scheduler.handle(event, Instant::now()) == Flow::Quit {
                     return Ok(());
                 }
@@ -158,6 +186,38 @@ fn watch_transcoded_wallpaper(events: Sender<Event>) -> Option<FileWatcher> {
     }
 }
 
+/// Runs on the desktop event thread after `TaskbarCreated`. Explorer's
+/// XAML comes up a little after its taskbar window, so the agent also looks
+/// again a few seconds later to attach the styling DLL.
+fn explorer_restarted(events: &Sender<Event>) {
+    let _ = events.send(Event::ExplorerRestarted);
+    for delay in RETRIES_AFTER_RESTART {
+        let events = events.clone();
+        let spawned = thread::Builder::new()
+            .name("explorer-recheck".to_owned())
+            .spawn(move || {
+                thread::sleep(delay);
+                info!(trigger = "Explorer restart recheck", "change noticed");
+                let _ = events.send(Event::Changed);
+            });
+        if let Err(error) = spawned {
+            warn!("could not schedule a look after the Explorer restart: {error}");
+        }
+    }
+}
+
+/// Shell colours are made for the system light/dark mode, so a change of
+/// mode means new colours.
+fn watch_system_mode(events: Sender<Event>) {
+    let watched = mode_watch::spawn(move |mode| {
+        info!(trigger = "system mode", ?mode, "change noticed");
+        let _ = events.send(Event::Changed);
+    });
+    if let Err(error) = watched {
+        warn!("{:#}", anyhow::Error::new(error));
+    }
+}
+
 fn recheck_for_engine_later(events: Sender<Event>) {
     let spawned = thread::Builder::new()
         .name("engine-recheck".to_owned())
@@ -175,6 +235,14 @@ struct Agent {
     paths: Paths,
     /// Loaded on first use and kept for the life of the agent.
     cache: Option<PaletteCache>,
+    styling: ShellStyling,
+}
+
+/// What one apply put in effect.
+struct Applied {
+    accent: Option<Color>,
+    palette: Palette,
+    shell_styling: bool,
 }
 
 impl Agent {
@@ -183,7 +251,13 @@ impl Agent {
     /// Returns the accent colour now in effect, if there is one.
     fn apply_once(&mut self) -> Option<Color> {
         match self.try_apply() {
-            Ok(accent) => accent,
+            Ok(applied) => {
+                // Also when the registry needed no change: the shell may
+                // have lost its colours (Explorer restart) or need them for
+                // another mode.
+                self.styling.sync(applied.shell_styling, &applied.palette);
+                applied.accent
+            }
             Err(error) => {
                 error!("apply failed: {error:#}");
                 None
@@ -191,7 +265,7 @@ impl Agent {
         }
     }
 
-    fn try_apply(&mut self) -> Result<Option<Color>> {
+    fn try_apply(&mut self) -> Result<Applied> {
         // Re-read every time: the file is tiny and this picks up edits
         // without a separate reload path.
         let (config, config_error) = Config::load_or_default(&self.paths.config);
@@ -225,10 +299,14 @@ impl Agent {
                 (resolved.kind.to_string(), resolved.wallpaper.to_string())
             }
         };
-        let accent = prepared.accent.map(|accent| accent.accent());
+        let applied = Applied {
+            accent: prepared.accent.map(|accent| accent.accent()),
+            palette: prepared.palette,
+            shell_styling: config.shell_styling,
+        };
         if prepared.pending.is_empty() {
             info!(%origin, %wallpaper, source = %prepared.palette.source, "nothing to change");
-            return Ok(accent);
+            return Ok(applied);
         }
         apply::commit(&prepared, &self.paths.saved_theme)?;
         info!(
@@ -238,6 +316,6 @@ impl Agent {
             values = prepared.pending.len(),
             "applied"
         );
-        Ok(accent)
+        Ok(applied)
     }
 }

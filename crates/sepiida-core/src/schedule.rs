@@ -14,6 +14,9 @@ use std::time::{Duration, Instant};
 pub enum Event {
     /// A wallpaper source or the settings changed.
     Changed,
+    /// Explorer restarted (`TaskbarCreated`): the shell styling it had is
+    /// gone. The agent notes it; for the schedule it is a change.
+    ExplorerRestarted,
     /// The user asked for an apply; skips the wait and ignores a pause.
     ApplyNow,
     Pause,
@@ -64,8 +67,8 @@ impl Scheduler {
 
     pub fn handle(&mut self, event: Event, now: Instant) -> Flow {
         match event {
-            Event::Changed if self.paused => self.missed = true,
-            Event::Changed => self.schedule(now),
+            Event::Changed | Event::ExplorerRestarted if self.paused => self.missed = true,
+            Event::Changed | Event::ExplorerRestarted => self.schedule(now),
             Event::ApplyNow => {
                 self.pending = Some(Pending {
                     first: now,
@@ -147,6 +150,20 @@ mod tests {
         assert!(s.take_due(t0 + ms(800)));
         assert!(!s.take_due(t0 + ms(900)), "only one apply per burst");
         assert_eq!(s.deadline(), None);
+    }
+
+    #[test]
+    fn an_explorer_restart_schedules_like_a_change_and_respects_a_pause() {
+        let mut s = Scheduler::new(SETTLE, MAX);
+        let t0 = Instant::now();
+        s.handle(Event::ExplorerRestarted, t0);
+        assert_eq!(s.deadline(), Some(t0 + SETTLE));
+        assert!(s.take_due(t0 + SETTLE));
+        s.handle(Event::Pause, t0 + ms(1_000));
+        s.handle(Event::ExplorerRestarted, t0 + ms(1_100));
+        assert_eq!(s.deadline(), None);
+        s.handle(Event::Resume, t0 + ms(2_000));
+        assert_eq!(s.deadline(), Some(t0 + ms(2_000) + SETTLE));
     }
 
     #[test]

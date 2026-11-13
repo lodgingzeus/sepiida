@@ -36,6 +36,15 @@ pub fn run_cli(command: ShellCommand) -> Result<()> {
 }
 
 fn report(attached: &Attached) {
+    if attached.replaced > 0 {
+        println!(
+            "asked {} control window(s) of an earlier copy to detach first",
+            attached.replaced
+        );
+    }
+    if let Some(error) = &attached.unhook_error {
+        println!("warning: could not remove the hook: {error}");
+    }
     if let Some((connection, hr)) = attached.remote_result {
         println!(
             "InitializeXamlDiagnosticsEx: VisualDiagConnection{connection} returned {:#010x}",

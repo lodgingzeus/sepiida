@@ -179,6 +179,7 @@ fn show_config(window: &SettingsWindow, config: &Config) {
     window.set_source_index(source_index(config.source));
     window.set_mode_index(mode_index(config.mode));
     window.set_accent_enabled(config.accent);
+    window.set_shell_styling(config.shell_styling);
     window.set_locked(config.locked_color.is_some());
     window.set_locked_text(
         config
@@ -209,6 +210,9 @@ fn connect(window: &SettingsWindow) {
 
     let weak = window.as_weak();
     window.on_accent_toggled(move |on| update(&weak, |config| config.accent = on));
+
+    let weak = window.as_weak();
+    window.on_shell_styling_toggled(move |on| update(&weak, |config| config.shell_styling = on));
 
     let weak = window.as_weak();
     window.on_lock_toggled(move |on| {

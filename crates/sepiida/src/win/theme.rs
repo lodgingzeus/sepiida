@@ -1,7 +1,10 @@
 //! Native theming: write the accent colour and light/dark mode, then tell
 //! running programs to pick the change up.
 
-use sepiida_core::{accent::RegistryWrite, snapshot::RestoreAction};
+use sepiida_core::{
+    accent::{self, RegistryWrite, ThemeMode},
+    snapshot::RestoreAction,
+};
 use windows::{
     Win32::{
         Foundation::{LPARAM, WPARAM},
@@ -17,6 +20,13 @@ use super::registry::{self, RegistryError};
 /// How long each top-level window gets to handle the broadcast. A hung
 /// window must not stall sepiida.
 const BROADCAST_TIMEOUT_MS: u32 = 200;
+
+/// The mode the taskbar and Start draw for. Dark when it cannot be read,
+/// the Windows 11 default.
+pub fn system_mode() -> ThemeMode {
+    let data = registry::read(&accent::system_mode_value()).unwrap_or(None);
+    accent::system_mode(data.as_ref())
+}
 
 /// Returns the writes that are not already in the registry. Every write
 /// makes all running programs repaint, so unchanged values are left alone.

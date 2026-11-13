@@ -142,6 +142,21 @@ impl AccentValues {
     }
 }
 
+/// The value that holds the mode the taskbar and Start draw for ("Windows
+/// mode"), for reading; its data is a placeholder.
+pub fn system_mode_value() -> RegistryWrite {
+    RegistryWrite::dword(PERSONALIZE_KEY, "SystemUsesLightTheme", 0)
+}
+
+/// The system mode from that value. Missing or unreadable counts as dark,
+/// the Windows 11 default.
+pub fn system_mode(data: Option<&RegistryData>) -> ThemeMode {
+    match data {
+        Some(RegistryData::Dword(value)) if *value != 0 => ThemeMode::Light,
+        _ => ThemeMode::Dark,
+    }
+}
+
 const ACCENT_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent";
 const DWM_KEY: &str = r"Software\Microsoft\Windows\DWM";
 const DESKTOP_KEY: &str = r"Control Panel\Desktop";
@@ -218,6 +233,22 @@ mod tests {
 
     fn luma(c: Color) -> u32 {
         u32::from(c.r) * 299 + u32::from(c.g) * 587 + u32::from(c.b) * 114
+    }
+
+    #[test]
+    fn system_mode_reads_the_light_theme_flag() {
+        assert_eq!(system_mode(Some(&RegistryData::Dword(1))), ThemeMode::Light);
+        assert_eq!(system_mode(Some(&RegistryData::Dword(0))), ThemeMode::Dark);
+        assert_eq!(system_mode(None), ThemeMode::Dark);
+        assert_eq!(
+            system_mode(Some(&RegistryData::Binary(vec![1]))),
+            ThemeMode::Dark
+        );
+        let probe = system_mode_value();
+        assert_eq!(
+            (probe.key, probe.name),
+            (PERSONALIZE_KEY, "SystemUsesLightTheme")
+        );
     }
 
     #[test]

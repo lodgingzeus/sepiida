@@ -5,6 +5,8 @@
 mod engine_watch;
 #[cfg(windows)]
 mod run;
+#[cfg(windows)]
+mod styling;
 #[cfg(any(windows, test))]
 mod watch;
 

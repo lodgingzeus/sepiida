@@ -14,7 +14,7 @@ usage:
   sepiida palette <image>          print the palette for an image
   sepiida apply [options]          theme Windows from the current wallpaper
   sepiida run                      stay in the background (tray icon) and re-theme when the wallpaper changes
-  sepiida restore [--dry-run]      put back the accent colour you had before sepiida
+  sepiida restore [--dry-run]      put back the accent colour you had before sepiida, and the stock taskbar
   sepiida shell <command>          experimental taskbar styling (see below)
 
 apply options:
@@ -25,9 +25,11 @@ apply options:
 `apply` follows the settings file: a locked colour is used instead of the
 wallpaper, and nothing is written for features that are turned off.
 
-shell commands (experimental):
+shell commands (experimental; `run` does this by itself when \"Restyle the
+taskbar\" is on in the settings):
   attach [--from N] [--remote]
-                     load the styling DLL into Explorer; --from tries
+                     load the styling DLL into Explorer, detaching any earlier
+                     copy first; --from tries
                      VisualDiagConnectionN onwards (default 1); --remote
                      asks from sepiida.exe instead of from inside Explorer
   color <rrggbb>     paint the taskbar background in this colour (`#` optional;

@@ -41,6 +41,7 @@ export component SettingsWindow inherits Window {
     in-out property <int> source-index;
     in-out property <int> mode-index;
     in-out property <bool> accent-enabled: true;
+    in-out property <bool> shell-styling: false;
     in-out property <bool> locked;
     in property <string> locked-text;
     in-out property <bool> start-with-windows;
@@ -49,6 +50,7 @@ export component SettingsWindow inherits Window {
     callback source-changed(int);
     callback mode-changed(int);
     callback accent-toggled(bool);
+    callback shell-styling-toggled(bool);
     callback lock-toggled(bool);
     callback start-with-windows-toggled(bool);
 
@@ -119,8 +121,9 @@ export component SettingsWindow inherits Window {
                     toggled => { root.lock-toggled(self.checked); }
                 }
                 Switch {
-                    text: "Restyle taskbar and Start (coming later)";
-                    enabled: false;
+                    text: "Restyle the taskbar (experimental)";
+                    checked <=> root.shell-styling;
+                    toggled => { root.shell-styling-toggled(self.checked); }
                 }
                 Switch {
                     text: "Glass effect, experimental (coming later)";

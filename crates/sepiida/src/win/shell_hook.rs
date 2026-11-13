@@ -11,15 +11,19 @@
 //!   Diagnostics request comes from sepiida.exe.
 //!
 //! Either way the DLL sets a named event once it watches the visual tree.
+//!
+//! Only one copy of the DLL may style a process: attaching first asks every
+//! copy already there (any version, any folder) to restore and detach.
 
 use std::{
     path::{Path, PathBuf},
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 
 use sepiida_core::shell::protocol::{
     ATTACH_MESSAGE, CONTROL_WINDOW_CLASS, Command, HOOK_PROC_EXPORT, INITIALIZE_EXPORT,
-    ready_event_name,
+    control_window_title, ready_event_name,
 };
 use windows::{
     Win32::{
@@ -50,6 +54,9 @@ pub const HOOK_DLL: &str = "sepiida_hook.dll";
 /// How long `attach` waits for the DLL to report that it is watching.
 /// Trying many connection numbers from inside Explorer takes a while.
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long `attach` waits for older copies to detach before going on.
+const DETACH_TIMEOUT: Duration = Duration::from_secs(2);
+const DETACH_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ShellHookError {
@@ -92,6 +99,8 @@ pub enum Method {
 }
 
 pub struct Attached {
+    /// Control windows of earlier copies asked to detach first.
+    pub replaced: usize,
     /// Remote only: the connection number that answered and its result.
     pub remote_result: Option<(u32, HRESULT)>,
     /// Whether the DLL confirmed it is watching the visual tree.
@@ -103,6 +112,9 @@ pub struct Attached {
     /// installed. Loaded then but not after means the hook procedure never
     /// acted on the attach message.
     pub loaded_while_hooked: Option<ModuleCheck>,
+    /// In-process only: removing the hook failed. The DLL has pinned
+    /// itself by then, so this only matters for the log.
+    pub unhook_error: Option<windows::core::Error>,
 }
 
 pub type ModuleCheck = Result<Option<PathBuf>, windows::core::Error>;
@@ -160,14 +172,20 @@ pub fn attach(
     {
         return Err(ShellHookError::WrongArch { explorer, ours });
     }
+    let replaced = detach_all(taskbar.pid)?;
+    if replaced > 0 {
+        wait_for_detach(taskbar.pid);
+    }
     let mut loaded_while_hooked = None;
+    let mut unhook_error = None;
     let ready = ReadyEvent::create(taskbar.pid)?;
     let library = Library::load(dll)?;
     let (remote_result, ready) = match method {
         Method::InProcess => {
-            let (ready, while_hooked) = attach_in_process(taskbar, &library, from, &ready)?;
-            loaded_while_hooked = Some(while_hooked);
-            (None, ready)
+            let hooked = attach_in_process(taskbar, &library, from, &ready)?;
+            loaded_while_hooked = Some(hooked.loaded);
+            unhook_error = hooked.unhook_error;
+            (None, hooked.confirmed)
         }
         Method::Remote => {
             let result = attach_remote(taskbar.pid, &library, from)?;
@@ -175,11 +193,19 @@ pub fn attach(
         }
     };
     Ok(Attached {
+        replaced,
         remote_result,
         ready,
         loaded: modules::loaded_module(taskbar.pid, HOOK_DLL),
         loaded_while_hooked,
+        unhook_error,
     })
+}
+
+struct Hooked {
+    confirmed: bool,
+    loaded: ModuleCheck,
+    unhook_error: Option<windows::core::Error>,
 }
 
 fn attach_in_process(
@@ -187,7 +213,7 @@ fn attach_in_process(
     library: &Library,
     from: u32,
     ready: &ReadyEvent,
-) -> Result<(bool, ModuleCheck), ShellHookError> {
+) -> Result<Hooked, ShellHookError> {
     let proc = library.export(HOOK_PROC_EXPORT)?;
     // SAFETY: the export has the HOOKPROC signature (see the DLL's
     // `SepiidaCallWndProc`).
@@ -221,11 +247,13 @@ fn attach_in_process(
     let confirmed = sent.is_ok() && ready.wait(READY_TIMEOUT);
     let while_hooked = modules::loaded_module(taskbar.pid, HOOK_DLL);
     // SAFETY: the hook handle from above, removed once.
-    if let Err(error) = unsafe { UnhookWindowsHookEx(hook) } {
-        eprintln!("warning: could not remove the hook: {error}");
-    }
+    let unhook_error = unsafe { UnhookWindowsHookEx(hook) }.err();
     sent.map_err(ShellHookError::Trigger)?;
-    Ok((confirmed, while_hooked))
+    Ok(Hooked {
+        confirmed,
+        loaded: while_hooked,
+        unhook_error,
+    })
 }
 
 fn attach_remote(pid: u32, library: &Library, from: u32) -> Result<(u32, HRESULT), ShellHookError> {
@@ -247,31 +275,75 @@ fn attach_remote(pid: u32, library: &Library, from: u32) -> Result<(u32, HRESULT
     Ok((connection, hr))
 }
 
-/// Posts a command to every control window the DLL created in Explorer.
-/// Returns how many received it.
+/// Posts a command to every control window of this protocol version in
+/// process `pid`. Returns how many received it.
 pub fn send(pid: u32, command: Command) -> Result<usize, ShellHookError> {
-    let (message, wparam) = command.encode();
-    let class = HSTRING::from(CONTROL_WINDOW_CLASS);
-    let mut sent = 0;
-    let mut after: Option<HWND> = None;
-    // SAFETY: plain Win32 calls; window handles are only used to post.
-    unsafe {
-        while let Ok(window) = FindWindowExW(Some(HWND_MESSAGE), after, &class, PCWSTR::null()) {
-            after = Some(window);
-            let mut owner = 0;
-            GetWindowThreadProcessId(window, Some(&mut owner));
-            if owner != pid {
-                continue;
-            }
-            PostMessageW(Some(window), message, WPARAM(wparam), LPARAM(0))
-                .map_err(ShellHookError::Post)?;
-            sent += 1;
-        }
-    }
+    let title = control_window_title();
+    let sent = post_to_windows(pid, Some(&title), command)?;
     if sent == 0 {
         return Err(ShellHookError::NotAttached);
     }
     Ok(sent)
+}
+
+/// Whether a copy of the DLL speaking this protocol version is attached in
+/// process `pid`.
+pub fn is_attached(pid: u32) -> bool {
+    !control_windows(pid, Some(&control_window_title())).is_empty()
+}
+
+/// Asks every copy of the DLL in process `pid`, whatever its version, to
+/// restore and detach. Returns how many control windows were asked.
+pub fn detach_all(pid: u32) -> Result<usize, ShellHookError> {
+    post_to_windows(pid, None, Command::Detach)
+}
+
+/// Waits a little for detached copies to destroy their control windows,
+/// so their restore runs before a new copy starts styling.
+fn wait_for_detach(pid: u32) {
+    let deadline = Instant::now() + DETACH_TIMEOUT;
+    while !control_windows(pid, None).is_empty() && Instant::now() < deadline {
+        thread::sleep(DETACH_POLL);
+    }
+}
+
+fn post_to_windows(
+    pid: u32,
+    title: Option<&str>,
+    command: Command,
+) -> Result<usize, ShellHookError> {
+    let (message, wparam) = command.encode();
+    let windows = control_windows(pid, title);
+    for &window in &windows {
+        // SAFETY: plain Win32 call; the handle is only used to post.
+        unsafe { PostMessageW(Some(window), message, WPARAM(wparam), LPARAM(0)) }
+            .map_err(ShellHookError::Post)?;
+    }
+    Ok(windows.len())
+}
+
+/// The DLL's message-only control windows owned by process `pid`; with a
+/// title, only those of that protocol version.
+fn control_windows(pid: u32, title: Option<&str>) -> Vec<HWND> {
+    let class = HSTRING::from(CONTROL_WINDOW_CLASS);
+    let title = title.map(HSTRING::from);
+    let title = title
+        .as_ref()
+        .map_or(PCWSTR::null(), |t| PCWSTR(t.as_ptr()));
+    let mut found = Vec::new();
+    let mut after: Option<HWND> = None;
+    // SAFETY: plain Win32 calls; the strings outlive the loop.
+    unsafe {
+        while let Ok(window) = FindWindowExW(Some(HWND_MESSAGE), after, &class, title) {
+            after = Some(window);
+            let mut owner = 0;
+            GetWindowThreadProcessId(window, Some(&mut owner));
+            if owner == pid {
+                found.push(window);
+            }
+        }
+    }
+    found
 }
 
 /// The hook DLL loaded into sepiida.exe (its `DllMain` does nothing).
