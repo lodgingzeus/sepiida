@@ -94,7 +94,7 @@ fn rebuild_tray(ui: &mut Ui) {
     match build_tray(&ui.events, paused, ui.accent) {
         Ok(tray) => {
             ui.tray = tray;
-            info!("tray icon added again");
+            info!("tray icon rebuilt");
         }
         Err(error) => warn!("could not add the tray icon again: {error:#}"),
     }

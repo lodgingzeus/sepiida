@@ -74,18 +74,24 @@ pub struct AccentValues {
     pub colorization_color: u32,
 }
 
+/// Source chroma (HCT) at or below which the wallpaper counts as grey.
+const GREY_CHROMA: f64 = 4.0;
+/// Source chroma from which the wallpaper gets the full Material accent.
+const COLOURFUL_CHROMA: f64 = 16.0;
+
 impl AccentValues {
-    /// Uses the hue of the palette's accent, but never more colour than
-    /// the wallpaper has: the Material accent always has strong chroma, so
-    /// a grey or black wallpaper would otherwise get a loud accent in an
-    /// arbitrary hue.
+    /// Uses the hue of the palette's accent, with its colourfulness scaled
+    /// by how colourful the wallpaper is: the Material accent always has
+    /// strong chroma, so a grey or black wallpaper would otherwise get a
+    /// loud accent in an arbitrary hue. Grey sources get a neutral accent,
+    /// clearly coloured ones the full Material accent, pale tints in
+    /// between.
     pub fn from_palette(palette: &Palette) -> Self {
         let accent = Hct::new(palette.light.accent.into());
-        let source = Hct::new(palette.source.into());
-        Self::from_hue_chroma(
-            accent.get_hue(),
-            accent.get_chroma().min(source.get_chroma()),
-        )
+        let source = Hct::new(palette.source.into()).get_chroma();
+        let share = ((source - GREY_CHROMA) / (COLOURFUL_CHROMA - GREY_CHROMA)).clamp(0.0, 1.0);
+        let chroma = source.max(accent.get_chroma() * share);
+        Self::from_hue_chroma(accent.get_hue(), chroma.min(accent.get_chroma()))
     }
 
     /// Builds the shades from the hue and colourfulness of `color`. Its
@@ -369,7 +375,8 @@ mod tests {
         let source = Color::new(96, 128, 128);
         let p = Palette::from_color(source);
         let accent = AccentValues::from_palette(&p).accent();
-        assert!(chroma(accent) <= chroma(source) + 1.0, "got {accent}");
+        assert!(chroma(accent) < chroma(p.light.accent), "got {accent}");
+        assert!(chroma(accent) > NEUTRAL_CHROMA, "got {accent}");
         assert!(accent.g > accent.r && accent.b > accent.r, "got {accent}");
     }
 }
