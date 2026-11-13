@@ -10,17 +10,12 @@
 use std::collections::HashMap;
 
 use sepiida_core::{Color, shell::protocol::xaml_color, shell::tree::Handle};
-use windows::{
-    Win32::System::Com::CoTaskMemFree,
-    core::{BSTR, HRESULT, HSTRING, IUnknown, Interface, PCWSTR},
-};
+use windows::core::{IUnknown, Interface};
 
 use crate::{
     log::log,
-    xamlom::{
-        ISolidColorBrush, IVisualTreeService3, IXamlDiagnostics, InstanceHandle,
-        METADATA_IS_VALUE_NULL, PropertyChainSource, PropertyChainValue, bstr_arg,
-    },
+    properties::{Xaml, log_failure},
+    xamlom::{ISolidColorBrush, IVisualTreeService3, IXamlDiagnostics, InstanceHandle},
 };
 
 const BRUSH_TYPE: &str = "Windows.UI.Xaml.Media.SolidColorBrush";
@@ -49,8 +44,7 @@ enum ColorPath {
 }
 
 pub struct Styler {
-    diagnostics: IXamlDiagnostics,
-    service: IVisualTreeService3,
+    xaml: Xaml,
     color: Option<Color>,
     brush: Option<InstanceHandle>,
     color_path: Option<ColorPath>,
@@ -60,8 +54,7 @@ pub struct Styler {
 impl Styler {
     pub fn new(diagnostics: IXamlDiagnostics, service: IVisualTreeService3) -> Self {
         Self {
-            diagnostics,
-            service,
+            xaml: Xaml::new(diagnostics, service),
             color: None,
             brush: None,
             color_path: None,
@@ -76,13 +69,16 @@ impl Styler {
             return;
         }
         log!("taskbar background found: {handle:#x}");
-        let Some(fill_index) = self.property_index(handle, "Fill") else {
+        let Some(fill_index) = self.xaml.property_index(handle, "Fill") else {
             return;
         };
-        let original = self.property(handle, fill_index).map(|value| Original {
-            handle: value,
-            object: self.object(value),
-        });
+        let original = self
+            .xaml
+            .property(handle, fill_index)
+            .map(|value| Original {
+                handle: value,
+                object: self.xaml.object(value),
+            });
         log!(
             "Fill index {fill_index}, original value {:#x?} (held: {})",
             original.as_ref().map(|o| o.handle),
@@ -142,15 +138,12 @@ impl Styler {
             return;
         };
         let fill_index = target.fill_index;
-        // SAFETY: plain calls on a live service with handles it issued.
-        let hr = unsafe {
-            match &target.original {
-                Some(original) => {
-                    let value = self.live_handle(original);
-                    self.service.SetProperty(handle, value, fill_index)
-                }
-                None => self.service.ClearProperty(handle, fill_index),
+        let hr = match &target.original {
+            Some(original) => {
+                let value = self.live_handle(original);
+                self.xaml.set_property(handle, fill_index, value)
             }
+            None => self.xaml.clear_property(handle, fill_index),
         };
         log!("restore {handle:#x}: {hr}");
         if hr.is_ok()
@@ -167,27 +160,10 @@ impl Styler {
         let Some(object) = &original.object else {
             return original.handle;
         };
-        let mut handle = 0;
-        // SAFETY: a live object pointer, borrowed for the call; `handle`
-        // is writable.
-        let hr = unsafe {
-            self.diagnostics
-                .GetHandleFromIInspectable(object.as_raw(), &mut handle)
-        };
-        if hr.is_ok() && handle != 0 {
-            return handle;
-        }
-        log!("GetHandleFromIInspectable failed: {hr}; registering the brush");
-        // SAFETY: as above.
-        let hr = unsafe {
-            self.diagnostics
-                .RegisterInstance(object.as_raw(), &mut handle)
-        };
-        if hr.is_ok() && handle != 0 {
-            return handle;
-        }
-        log!("RegisterInstance failed: {hr}; trying the recorded handle");
-        original.handle
+        self.xaml.handle_of(object).unwrap_or_else(|| {
+            log!("trying the recorded handle");
+            original.handle
+        })
     }
 
     fn paint(&mut self, handle: Handle) {
@@ -197,8 +173,7 @@ impl Styler {
         let Some(target) = self.targets.get_mut(&handle) else {
             return;
         };
-        // SAFETY: plain call on a live service with handles it issued.
-        let hr = unsafe { self.service.SetProperty(handle, brush, target.fill_index) };
+        let hr = self.xaml.set_property(handle, target.fill_index, brush);
         log!("set Fill on {handle:#x}: {hr}");
         if hr.is_err() {
             return;
@@ -206,7 +181,7 @@ impl Styler {
         target.styled = true;
         let fill_index = target.fill_index;
         // Read back: did XAML keep our brush?
-        let now = self.property(handle, fill_index);
+        let now = self.xaml.property(handle, fill_index);
         log!(
             "Fill on {handle:#x} is now {now:#x?} (our brush {brush:#x}): {}",
             if now == Some(brush) {
@@ -222,7 +197,7 @@ impl Styler {
     fn update_brush(&mut self, color: Color) -> bool {
         let brush = match self.brush {
             Some(brush) => brush,
-            None => match self.create(BRUSH_TYPE, None) {
+            None => match self.xaml.create(BRUSH_TYPE, None) {
                 Some(brush) => {
                     self.brush = Some(brush);
                     brush
@@ -248,25 +223,26 @@ impl Styler {
         log!("brush colour {color} via {:?}: {ok}", self.color_path);
         if ok {
             // Read back what XAML now reports for the colour.
-            self.chain_index(brush, "Color");
+            self.xaml.chain_index(brush, "Color");
         }
         ok
     }
 
     fn color_by_diagnostics(&self, brush: InstanceHandle, color: Color) -> bool {
-        let Some(index) = self.property_index(brush, "Color") else {
+        let Some(index) = self.xaml.property_index(brush, "Color") else {
             return false;
         };
-        let Some(value) = self.create(COLOR_TYPE, Some(&xaml_color(color))) else {
+        let Some(value) = self.xaml.create(COLOR_TYPE, Some(&xaml_color(color))) else {
             return false;
         };
-        // SAFETY: plain call on a live service with handles it issued.
-        let hr = unsafe { self.service.SetProperty(brush, value, index) };
-        log_failure("SetProperty(Color)", hr)
+        log_failure(
+            "SetProperty(Color)",
+            self.xaml.set_property(brush, index, value),
+        )
     }
 
     fn color_by_interface(&self, brush: InstanceHandle, color: Color) -> bool {
-        let Some(object) = self.object(brush) else {
+        let Some(object) = self.xaml.object(brush) else {
             return false;
         };
         let brush: ISolidColorBrush = match object.cast() {
@@ -286,149 +262,4 @@ impl Styler {
         let hr = unsafe { brush.put_Color(value) };
         log_failure("ISolidColorBrush::put_Color", hr)
     }
-
-    /// The object behind `handle`, as an owned reference.
-    fn object(&self, handle: InstanceHandle) -> Option<IUnknown> {
-        let mut raw = core::ptr::null_mut();
-        // SAFETY: `raw` receives an owned reference, wrapped right after.
-        let hr = unsafe { self.diagnostics.GetIInspectableFromHandle(handle, &mut raw) };
-        if !log_failure("GetIInspectableFromHandle", hr) || raw.is_null() {
-            return None;
-        }
-        // SAFETY: a non-null, owned interface pointer from XAML.
-        Some(unsafe { IUnknown::from_raw(raw) })
-    }
-
-    fn create(&self, type_name: &str, value: Option<&str>) -> Option<InstanceHandle> {
-        let type_name_b = BSTR::from(type_name);
-        let value_b = value.map(BSTR::from).unwrap_or_default();
-        let mut handle = 0;
-        // SAFETY: the strings outlive the call; `handle` is writable.
-        let hr = unsafe {
-            self.service
-                .CreateInstance(bstr_arg(&type_name_b), bstr_arg(&value_b), &mut handle)
-        };
-        if hr.is_err() || handle == 0 {
-            log!("CreateInstance({type_name}, {value:?}) failed: {hr}");
-            return None;
-        }
-        Some(handle)
-    }
-
-    /// The index `SetProperty` takes for `property` on `handle`.
-    ///
-    /// Microsoft documents the property chain as the way to find it.
-    /// `GetPropertyIndex` answers E_INVALIDARG in Explorer on Windows 11
-    /// 24H2, so it is only a fallback.
-    fn property_index(&self, handle: InstanceHandle, property: &str) -> Option<u32> {
-        self.chain_index(handle, property)
-            .or_else(|| self.lookup_index(handle, property))
-    }
-
-    fn lookup_index(&self, handle: InstanceHandle, property: &str) -> Option<u32> {
-        let name = HSTRING::from(property);
-        let mut index = 0;
-        // SAFETY: `name` outlives the call and is NUL-terminated; `index`
-        // is writable.
-        let hr = unsafe {
-            self.service
-                .GetPropertyIndex(handle, PCWSTR(name.as_ptr()), &mut index)
-        };
-        if hr.is_err() {
-            log!("GetPropertyIndex({handle:#x}, {property}) failed: {hr}");
-            return None;
-        }
-        Some(index)
-    }
-
-    fn property(&self, handle: InstanceHandle, index: u32) -> Option<InstanceHandle> {
-        let mut value = 0;
-        // SAFETY: `value` is writable.
-        let hr = unsafe { self.service.GetProperty(handle, index, &mut value) };
-        if hr.is_err() {
-            log!("GetProperty({handle:#x}, {index}) failed: {hr}");
-        }
-        (hr.is_ok() && value != 0).then_some(value)
-    }
-
-    /// Finds `property` in the element's property chain and returns its
-    /// index. Logs each of its entries: type and value strings and where
-    /// the value comes from (style, template, local value…), which is how
-    /// XAML itself names the types and formats the values we pass to
-    /// `CreateInstance`.
-    fn chain_index(&self, handle: InstanceHandle, property: &str) -> Option<u32> {
-        let (mut source_count, mut value_count) = (0u32, 0u32);
-        let mut sources: *mut PropertyChainSource = core::ptr::null_mut();
-        let mut values: *mut PropertyChainValue = core::ptr::null_mut();
-        // SAFETY: all out pointers are writable.
-        let hr = unsafe {
-            self.service.GetPropertyValuesChain(
-                handle,
-                &mut source_count,
-                &mut sources,
-                &mut value_count,
-                &mut values,
-            )
-        };
-        if hr.is_err() {
-            log!("GetPropertyValuesChain({handle:#x}) failed: {hr}");
-        }
-        // SAFETY: on success XAML returns arrays of the given lengths,
-        // allocated with CoTaskMemAlloc, whose strings we now own.
-        let (sources, values) = unsafe {
-            (
-                take_array(sources, source_count),
-                take_array(values, value_count),
-            )
-        };
-        let entries: Vec<&PropertyChainValue> = values
-            .iter()
-            .filter(|v| v.PropertyName == property)
-            .collect();
-        for value in &entries {
-            let source = sources
-                .get(value.PropertyChainIndex as usize)
-                .map(|s| (s.Source.0, s.Name.to_string(), s.TargetType.to_string()));
-            log!(
-                "{property} of {handle:#x}: type={} declared={} value_type={} value={} overridden={} null={} source={source:?}",
-                value.Type,
-                value.DeclaringType,
-                value.ValueType,
-                value.Value,
-                value.Overridden.as_bool(),
-                value.MetadataBits & METADATA_IS_VALUE_NULL != 0,
-            );
-        }
-        // Every entry of one property carries the same index.
-        let index = entries.first().map(|value| value.Index);
-        if index.is_none() {
-            log!("{property} not in the property chain of {handle:#x}");
-        }
-        index
-    }
-}
-
-fn log_failure(what: &str, hr: HRESULT) -> bool {
-    if hr.is_err() {
-        log!("{what} failed: {hr}");
-    }
-    hr.is_ok()
-}
-
-/// Moves the elements out of a COM-allocated array and frees the array.
-///
-/// # Safety
-/// `array` is null or points to `count` initialised elements allocated with
-/// `CoTaskMemAlloc` that the caller owns.
-unsafe fn take_array<T>(array: *mut T, count: u32) -> Vec<T> {
-    if array.is_null() {
-        return Vec::new();
-    }
-    let items = (0..count as usize)
-        // SAFETY: in bounds per the contract; each element is read once.
-        .map(|i| unsafe { array.add(i).read() })
-        .collect();
-    // SAFETY: allocated with CoTaskMemAlloc per the contract.
-    unsafe { CoTaskMemFree(Some(array.cast_const().cast())) };
-    items
 }

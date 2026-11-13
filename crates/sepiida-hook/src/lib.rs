@@ -21,6 +21,8 @@ mod log;
 #[cfg(windows)]
 mod module;
 #[cfg(windows)]
+mod properties;
+#[cfg(windows)]
 mod session;
 #[cfg(windows)]
 mod styler;
