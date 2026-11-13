@@ -6,10 +6,12 @@ pub mod config;
 pub mod engine_config;
 pub mod engine_tracker;
 mod fsio;
+pub mod hook_protocol;
 pub mod schedule;
 pub mod snapshot;
 pub mod source;
 pub mod wallpaper_engine;
+pub mod xaml_tree;
 
 use std::{fmt, path::Path, str::FromStr};
 
