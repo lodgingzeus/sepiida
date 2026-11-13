@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use sepiida_core::{Color, shell::protocol::xaml_color, shell::tree::Handle};
 use windows::{
     Win32::System::Com::CoTaskMemFree,
-    core::{BSTR, HRESULT, IUnknown, Interface, PCWSTR, w},
+    core::{BSTR, HRESULT, HSTRING, IUnknown, Interface, PCWSTR},
 };
 
 use crate::{
@@ -68,8 +68,7 @@ impl Styler {
             return;
         }
         log!("taskbar background found: {handle:#x}");
-        self.log_chain(handle, "Fill");
-        let Some(fill_index) = self.property_index(handle, w!("Fill")) else {
+        let Some(fill_index) = self.property_index(handle, "Fill") else {
             return;
         };
         let original = self.property(handle, fill_index);
@@ -189,13 +188,14 @@ impl Styler {
         };
         log!("brush colour {color} via {:?}: {ok}", self.color_path);
         if ok {
-            self.log_chain(brush, "Color");
+            // Read back what XAML now reports for the colour.
+            self.chain_index(brush, "Color");
         }
         ok
     }
 
     fn color_by_diagnostics(&self, brush: InstanceHandle, color: Color) -> bool {
-        let Some(index) = self.property_index(brush, w!("Color")) else {
+        let Some(index) = self.property_index(brush, "Color") else {
             return false;
         };
         let Some(value) = self.create(COLOR_TYPE, Some(&xaml_color(color))) else {
@@ -249,14 +249,27 @@ impl Styler {
         Some(handle)
     }
 
-    fn property_index(&self, handle: InstanceHandle, name: PCWSTR) -> Option<u32> {
+    /// The index `SetProperty` takes for `property` on `handle`.
+    ///
+    /// Microsoft documents the property chain as the way to find it.
+    /// `GetPropertyIndex` answers E_INVALIDARG in Explorer on Windows 11
+    /// 24H2, so it is only a fallback.
+    fn property_index(&self, handle: InstanceHandle, property: &str) -> Option<u32> {
+        self.chain_index(handle, property)
+            .or_else(|| self.lookup_index(handle, property))
+    }
+
+    fn lookup_index(&self, handle: InstanceHandle, property: &str) -> Option<u32> {
+        let name = HSTRING::from(property);
         let mut index = 0;
-        // SAFETY: `name` is a static string; `index` is writable.
-        let hr = unsafe { self.service.GetPropertyIndex(handle, name, &mut index) };
+        // SAFETY: `name` outlives the call and is NUL-terminated; `index`
+        // is writable.
+        let hr = unsafe {
+            self.service
+                .GetPropertyIndex(handle, PCWSTR(name.as_ptr()), &mut index)
+        };
         if hr.is_err() {
-            // SAFETY: `w!` strings are valid and NUL-terminated.
-            let name = unsafe { name.to_string() }.unwrap_or_default();
-            log!("GetPropertyIndex({handle:#x}, {name}) failed: {hr}");
+            log!("GetPropertyIndex({handle:#x}, {property}) failed: {hr}");
             return None;
         }
         Some(index)
@@ -272,11 +285,12 @@ impl Styler {
         (hr.is_ok() && value != 0).then_some(value)
     }
 
-    /// Logs one property's entries in the element's property chain: its
-    /// type and value strings and where the value comes from (style,
-    /// template, local value…). This is how XAML itself names the types
-    /// and formats the values we pass to `CreateInstance`.
-    fn log_chain(&self, handle: InstanceHandle, property: &str) {
+    /// Finds `property` in the element's property chain and returns its
+    /// index. Logs each of its entries: type and value strings and where
+    /// the value comes from (style, template, local value…), which is how
+    /// XAML itself names the types and formats the values we pass to
+    /// `CreateInstance`.
+    fn chain_index(&self, handle: InstanceHandle, property: &str) -> Option<u32> {
         let (mut source_count, mut value_count) = (0u32, 0u32);
         let mut sources: *mut PropertyChainSource = core::ptr::null_mut();
         let mut values: *mut PropertyChainValue = core::ptr::null_mut();
@@ -301,7 +315,11 @@ impl Styler {
                 take_array(values, value_count),
             )
         };
-        for value in values.iter().filter(|v| v.PropertyName == property) {
+        let entries: Vec<&PropertyChainValue> = values
+            .iter()
+            .filter(|v| v.PropertyName == property)
+            .collect();
+        for value in &entries {
             let source = sources
                 .get(value.PropertyChainIndex as usize)
                 .map(|s| (s.Source.0, s.Name.to_string(), s.TargetType.to_string()));
@@ -315,6 +333,12 @@ impl Styler {
                 value.MetadataBits & METADATA_IS_VALUE_NULL != 0,
             );
         }
+        // Every entry of one property carries the same index.
+        let index = entries.first().map(|value| value.Index);
+        if index.is_none() {
+            log!("{property} not in the property chain of {handle:#x}");
+        }
+        index
     }
 }
 

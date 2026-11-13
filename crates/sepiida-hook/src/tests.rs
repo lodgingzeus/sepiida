@@ -21,7 +21,7 @@ use sepiida_core::{
 };
 use windows::{
     Win32::{
-        Foundation::{E_NOTIMPL, HWND, LPARAM, RECT, S_OK, WPARAM},
+        Foundation::{E_INVALIDARG, E_NOTIMPL, HWND, LPARAM, RECT, S_OK, WPARAM},
         System::{
             Com::{CoTaskMemAlloc, IClassFactory},
             Ole::IObjectWithSite,
@@ -123,8 +123,9 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
     ) -> HRESULT {
         self.0
             .record(format!("GetPropertyValuesChain {instance:#x}"));
-        // SAFETY: CoTaskMemAlloc'd arrays of one element each, handed to
-        // the caller like XAML does; the caller frees them.
+        // SAFETY: CoTaskMemAlloc'd arrays handed to the caller like XAML
+        // does; the caller frees them. Like Explorer's chain, it lists
+        // each property with the index `SetProperty` takes.
         unsafe {
             let source: *mut PropertyChainSource =
                 CoTaskMemAlloc(size_of::<PropertyChainSource>()).cast();
@@ -135,24 +136,19 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
                 Source: BaseValueSource(3),
                 SrcInfo: empty_source_info(),
             });
+            let chain = [
+                chain_value(FILL_INDEX, "Fill", "Windows.UI.Xaml.Media.Brush"),
+                chain_value(COLOR_INDEX, "Color", "Windows.UI.Color"),
+            ];
             let value: *mut PropertyChainValue =
-                CoTaskMemAlloc(size_of::<PropertyChainValue>()).cast();
-            value.write(PropertyChainValue {
-                Index: FILL_INDEX,
-                Type: BSTR::from("Windows.UI.Xaml.Media.Brush"),
-                DeclaringType: BSTR::from("Windows.UI.Xaml.Shapes.Shape"),
-                ValueType: BSTR::from(BRUSH),
-                ItemType: BSTR::new(),
-                Value: BSTR::from("#FF202020"),
-                Overridden: BOOL(0),
-                MetadataBits: 0,
-                PropertyName: BSTR::from("Fill"),
-                PropertyChainIndex: 0,
-            });
+                CoTaskMemAlloc(size_of::<PropertyChainValue>() * chain.len()).cast();
+            for (i, entry) in chain.into_iter().enumerate() {
+                value.add(i).write(entry);
+            }
             *sources = source;
             *source_count = 1;
             *values = value;
-            *property_count = 1;
+            *property_count = 2;
         }
         S_OK
     }
@@ -204,19 +200,13 @@ impl IVisualTreeService2_Impl for FakeXaml_Impl {
         &self,
         object: InstanceHandle,
         name: PCWSTR,
-        index: *mut u32,
+        _index: *mut u32,
     ) -> HRESULT {
         let name = text(name.0);
         self.0
             .record(format!("GetPropertyIndex {object:#x} {name}"));
-        let value = match name.as_str() {
-            "Fill" => FILL_INDEX,
-            "Color" => COLOR_INDEX,
-            _ => return E_NOTIMPL,
-        };
-        // SAFETY: the DLL passes a writable pointer.
-        unsafe { *index = value };
-        S_OK
+        // Explorer on Windows 11 24H2 answers E_INVALIDARG for every name.
+        E_INVALIDARG
     }
     unsafe fn GetProperty(
         &self,
@@ -310,6 +300,21 @@ impl IXamlDiagnostics_Impl for FakeXaml_Impl {
 }
 
 const BRUSH: &str = "Windows.UI.Xaml.Media.SolidColorBrush";
+
+fn chain_value(index: u32, name: &str, type_name: &str) -> PropertyChainValue {
+    PropertyChainValue {
+        Index: index,
+        Type: BSTR::from(type_name),
+        DeclaringType: BSTR::from("Declaring"),
+        ValueType: BSTR::from(type_name),
+        ItemType: BSTR::new(),
+        Value: BSTR::from("value"),
+        Overridden: BOOL(0),
+        MetadataBits: 0,
+        PropertyName: BSTR::from(name),
+        PropertyChainIndex: 0,
+    }
+}
 
 fn empty_source_info() -> SourceInfo {
     SourceInfo {
@@ -435,14 +440,13 @@ fn attach_style_restore_reattach_detach() {
     unsafe { tap.SetSite(&site) }.unwrap();
     let callback = wait_for_callback(&first);
     add_taskbar(&callback);
-    assert!(first.has("GetPropertyIndex 0x5 Fill"));
     assert!(first.has("GetPropertyValuesChain 0x5"));
     assert!(control_window().is_some());
 
     // Colour: shared brush, its colour set through the diagnostics API.
     send(Command::SetColor(Color::new(0x33, 0x66, 0x99)));
     assert!(first.has(&format!("CreateInstance {BRUSH} null -> 0x1000")));
-    assert!(first.has("GetPropertyIndex 0x1000 Color"));
+    assert!(first.has("GetPropertyValuesChain 0x1000"));
     assert!(first.has("CreateInstance Windows.UI.Color #FF336699 -> 0x1001"));
     assert!(first.has(&format!("SetProperty 0x1000 {COLOR_INDEX} 0x1001")));
     assert!(first.has(&format!("SetProperty 0x5 {FILL_INDEX} 0x1000")));
@@ -474,7 +478,7 @@ fn attach_style_restore_reattach_detach() {
     let callback2 = wait_for_callback(&second);
     add_taskbar(&callback2);
     assert_eq!(first.count(&restore), 2);
-    assert!(second.has("GetPropertyIndex 0x5 Fill"));
+    assert!(second.has("GetPropertyValuesChain 0x5"));
     // Late callbacks for the old attachment are ignored.
     let before = first.calls().len();
     add(&callback, 50, 0, RECTANGLE_TYPE, TASKBAR_BACKGROUND_NAME);
