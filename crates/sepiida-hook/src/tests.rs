@@ -21,7 +21,7 @@ use sepiida_core::{
 };
 use windows::{
     Win32::{
-        Foundation::{E_INVALIDARG, E_NOTIMPL, HWND, LPARAM, RECT, S_OK, WPARAM},
+        Foundation::{E_INVALIDARG, E_NOTIMPL, ERROR_NOT_FOUND, HWND, LPARAM, RECT, S_OK, WPARAM},
         System::{
             Com::{CoTaskMemAlloc, IClassFactory},
             Ole::IObjectWithSite,
@@ -39,6 +39,8 @@ use crate::{DllGetClassObject, tap::Factory, xamlom::*};
 const FILL_INDEX: u32 = 7;
 const COLOR_INDEX: u32 = 9;
 const ORIGINAL_FILL: InstanceHandle = 0x100;
+/// The handle the original brush gets once its first handle went stale.
+const LIVE_FILL: InstanceHandle = 0x200;
 const RECT_HANDLE: InstanceHandle = 5;
 
 struct SendCallback(IVisualTreeServiceCallback);
@@ -160,6 +162,11 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
     ) -> HRESULT {
         self.0
             .record(format!("SetProperty {instance:#x} {index} {value:#x}"));
+        // Like Explorer: once replaced, the original brush's first handle
+        // is stale.
+        if value == ORIGINAL_FILL {
+            return ERROR_NOT_FOUND.to_hresult();
+        }
         self.0
             .values
             .lock()
@@ -282,11 +289,29 @@ impl IXamlDiagnostics_Impl for FakeXaml_Impl {
     unsafe fn GetApplication(&self, _: *mut *mut c_void) -> HRESULT {
         E_NOTIMPL
     }
-    unsafe fn GetIInspectableFromHandle(&self, _: InstanceHandle, _: *mut *mut c_void) -> HRESULT {
-        E_NOTIMPL
+    unsafe fn GetIInspectableFromHandle(
+        &self,
+        handle: InstanceHandle,
+        object: *mut *mut c_void,
+    ) -> HRESULT {
+        if handle != ORIGINAL_FILL {
+            return E_NOTIMPL;
+        }
+        // Any COM object stands in for the original brush.
+        let brush: IUnknown = Factory.into();
+        // SAFETY: the DLL passes a writable pointer and takes ownership.
+        unsafe { *object = brush.into_raw() };
+        S_OK
     }
-    unsafe fn GetHandleFromIInspectable(&self, _: *mut c_void, _: *mut InstanceHandle) -> HRESULT {
-        E_NOTIMPL
+    unsafe fn GetHandleFromIInspectable(
+        &self,
+        _: *mut c_void,
+        handle: *mut InstanceHandle,
+    ) -> HRESULT {
+        self.0.record("GetHandleFromIInspectable".into());
+        // SAFETY: the DLL passes a writable pointer.
+        unsafe { *handle = LIVE_FILL };
+        S_OK
     }
     unsafe fn HitTest(&self, _: RECT, _: *mut u32, _: *mut *mut InstanceHandle) -> HRESULT {
         E_NOTIMPL
@@ -459,8 +484,9 @@ fn attach_style_restore_reattach_detach() {
     );
     assert!(first.has("CreateInstance Windows.UI.Color #FF010203 -> 0x1002"));
 
-    // Restore puts the original brush back.
-    let restore = format!("SetProperty 0x5 {FILL_INDEX} {ORIGINAL_FILL:#x}");
+    // Restore puts the original brush back through a fresh handle: the
+    // recorded one went stale once the brush was replaced.
+    let restore = format!("SetProperty 0x5 {FILL_INDEX} {LIVE_FILL:#x}");
     send(Command::Restore);
     assert_eq!(first.count(&restore), 1);
     // Nothing styled: a second restore does nothing.
@@ -487,7 +513,7 @@ fn attach_style_restore_reattach_detach() {
     // Detach: restore, unadvise, window gone.
     send(Command::SetColor(Color::new(4, 5, 6)));
     send(Command::Detach);
-    assert!(second.has(&format!("SetProperty 0x5 {FILL_INDEX} {ORIGINAL_FILL:#x}")));
+    assert!(second.has(&format!("SetProperty 0x5 {FILL_INDEX} {LIVE_FILL:#x}")));
     wait_until("Unadvise of the second attachment", || {
         second.has("Unadvise")
     });

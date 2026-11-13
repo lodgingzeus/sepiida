@@ -30,8 +30,16 @@ struct Target {
     fill_index: u32,
     /// The brush the rectangle had before we changed it; `None` if it had
     /// none.
-    original: Option<InstanceHandle>,
+    original: Option<Original>,
     styled: bool,
+}
+
+struct Original {
+    handle: InstanceHandle,
+    /// A strong reference to the brush. XAML Diagnostics holds handles
+    /// weakly: once our brush replaces this one nothing else keeps it
+    /// alive, and `handle` goes stale (ERROR_NOT_FOUND on restore).
+    object: Option<IUnknown>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,8 +79,15 @@ impl Styler {
         let Some(fill_index) = self.property_index(handle, "Fill") else {
             return;
         };
-        let original = self.property(handle, fill_index);
-        log!("Fill index {fill_index}, original value {original:#x?}");
+        let original = self.property(handle, fill_index).map(|value| Original {
+            handle: value,
+            object: self.object(value),
+        });
+        log!(
+            "Fill index {fill_index}, original value {:#x?} (held: {})",
+            original.as_ref().map(|o| o.handle),
+            original.as_ref().is_some_and(|o| o.object.is_some()),
+        );
         self.targets.insert(
             handle,
             Target {
@@ -111,24 +126,68 @@ impl Styler {
 
     pub fn restore_all(&mut self) {
         self.color = None;
-        for (&handle, target) in &mut self.targets {
-            if !target.styled {
-                continue;
-            }
-            // SAFETY: plain calls on a live service with handles it issued.
-            let hr = unsafe {
-                match target.original {
-                    Some(original) => self
-                        .service
-                        .SetProperty(handle, original, target.fill_index),
-                    None => self.service.ClearProperty(handle, target.fill_index),
-                }
-            };
-            log!("restore {handle:#x}: {hr}");
-            if hr.is_ok() {
-                target.styled = false;
-            }
+        let styled: Vec<Handle> = self
+            .targets
+            .iter()
+            .filter(|(_, target)| target.styled)
+            .map(|(&handle, _)| handle)
+            .collect();
+        for handle in styled {
+            self.restore(handle);
         }
+    }
+
+    fn restore(&mut self, handle: Handle) {
+        let Some(target) = self.targets.get(&handle) else {
+            return;
+        };
+        let fill_index = target.fill_index;
+        // SAFETY: plain calls on a live service with handles it issued.
+        let hr = unsafe {
+            match &target.original {
+                Some(original) => {
+                    let value = self.live_handle(original);
+                    self.service.SetProperty(handle, value, fill_index)
+                }
+                None => self.service.ClearProperty(handle, fill_index),
+            }
+        };
+        log!("restore {handle:#x}: {hr}");
+        if hr.is_ok()
+            && let Some(target) = self.targets.get_mut(&handle)
+        {
+            target.styled = false;
+        }
+    }
+
+    /// A handle to the original brush that is valid now: asked for afresh
+    /// from the object we hold, since the handle recorded at discovery
+    /// may have gone stale.
+    fn live_handle(&self, original: &Original) -> InstanceHandle {
+        let Some(object) = &original.object else {
+            return original.handle;
+        };
+        let mut handle = 0;
+        // SAFETY: a live object pointer, borrowed for the call; `handle`
+        // is writable.
+        let hr = unsafe {
+            self.diagnostics
+                .GetHandleFromIInspectable(object.as_raw(), &mut handle)
+        };
+        if hr.is_ok() && handle != 0 {
+            return handle;
+        }
+        log!("GetHandleFromIInspectable failed: {hr}; registering the brush");
+        // SAFETY: as above.
+        let hr = unsafe {
+            self.diagnostics
+                .RegisterInstance(object.as_raw(), &mut handle)
+        };
+        if hr.is_ok() && handle != 0 {
+            return handle;
+        }
+        log!("RegisterInstance failed: {hr}; trying the recorded handle");
+        original.handle
     }
 
     fn paint(&mut self, handle: Handle) {
@@ -207,14 +266,9 @@ impl Styler {
     }
 
     fn color_by_interface(&self, brush: InstanceHandle, color: Color) -> bool {
-        let mut raw = core::ptr::null_mut();
-        // SAFETY: `raw` receives an owned reference, wrapped right after.
-        let hr = unsafe { self.diagnostics.GetIInspectableFromHandle(brush, &mut raw) };
-        if !log_failure("GetIInspectableFromHandle", hr) || raw.is_null() {
+        let Some(object) = self.object(brush) else {
             return false;
-        }
-        // SAFETY: a non-null, owned interface pointer from XAML.
-        let object = unsafe { IUnknown::from_raw(raw) };
+        };
         let brush: ISolidColorBrush = match object.cast() {
             Ok(brush) => brush,
             Err(error) => {
@@ -231,6 +285,18 @@ impl Styler {
         // SAFETY: plain call on a live interface.
         let hr = unsafe { brush.put_Color(value) };
         log_failure("ISolidColorBrush::put_Color", hr)
+    }
+
+    /// The object behind `handle`, as an owned reference.
+    fn object(&self, handle: InstanceHandle) -> Option<IUnknown> {
+        let mut raw = core::ptr::null_mut();
+        // SAFETY: `raw` receives an owned reference, wrapped right after.
+        let hr = unsafe { self.diagnostics.GetIInspectableFromHandle(handle, &mut raw) };
+        if !log_failure("GetIInspectableFromHandle", hr) || raw.is_null() {
+            return None;
+        }
+        // SAFETY: a non-null, owned interface pointer from XAML.
+        Some(unsafe { IUnknown::from_raw(raw) })
     }
 
     fn create(&self, type_name: &str, value: Option<&str>) -> Option<InstanceHandle> {
