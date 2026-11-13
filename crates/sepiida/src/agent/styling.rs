@@ -31,6 +31,8 @@ use crate::win::{
 /// After an Explorer restart, no attach before this long: the taskbar
 /// window exists before its XAML does.
 const SETTLE_AFTER_RESTART: Duration = Duration::from_secs(3);
+/// How long a freshly attached DLL gets to create its control window.
+const CONTROL_WINDOW_TIMEOUT: Duration = Duration::from_secs(3);
 /// When the agent looks again after an Explorer restart, counted from the
 /// restart. One-off timers after an event, like the tray's re-adds.
 pub const RETRIES_AFTER_RESTART: [Duration; 2] = [Duration::from_secs(4), Duration::from_secs(15)];
@@ -123,12 +125,18 @@ impl ShellStyling {
                 if let Some(error) = attached.unhook_error {
                     warn!("could not remove the attach hook: {error}");
                 }
-                if attached.ready {
-                    info!("styling DLL attached");
-                } else {
+                if !attached.ready {
                     warn!("the styling DLL did not report back; see logs\\hook.log");
+                    return false;
                 }
-                attached.ready
+                if !shell_hook::wait_until_attached(taskbar.pid, CONTROL_WINDOW_TIMEOUT) {
+                    warn!(
+                        "the styling DLL attached but created no control window; see logs\\hook.log"
+                    );
+                    return false;
+                }
+                info!("styling DLL attached");
+                true
             }
             Err(error) => {
                 warn!("could not attach the styling DLL: {error}");

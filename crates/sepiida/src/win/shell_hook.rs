@@ -56,6 +56,7 @@ pub const HOOK_DLL: &str = "sepiida_hook.dll";
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long `attach` waits for older copies to detach before going on.
 const DETACH_TIMEOUT: Duration = Duration::from_secs(2);
+/// Interval for the short waits on control windows coming and going.
 const DETACH_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]
@@ -290,6 +291,22 @@ pub fn send(pid: u32, command: Command) -> Result<usize, ShellHookError> {
 /// process `pid`.
 pub fn is_attached(pid: u32) -> bool {
     !control_windows(pid, Some(&control_window_title())).is_empty()
+}
+
+/// Waits up to `timeout` for the DLL's control window to appear in process
+/// `pid`. The DLL reports ready once it watches the tree, but creates the
+/// window only on the first tree callback, a moment later.
+pub fn wait_until_attached(pid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if is_attached(pid) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(DETACH_POLL);
+    }
 }
 
 /// Asks every copy of the DLL in process `pid`, whatever its version, to

@@ -12,7 +12,7 @@
 //! found: Explorer may replace the value later (a theme or mode change),
 //! and restoring must bring back what it set last, not a stale brush.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sepiida_core::{
     Color,
@@ -47,6 +47,13 @@ struct Original {
     object: Option<IUnknown>,
 }
 
+struct Brush {
+    handle: InstanceHandle,
+    /// Keeps the brush alive while no element uses it (after a restore, or
+    /// once Explorer put its own brush back), so `handle` stays valid.
+    _object: Option<IUnknown>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ColorPath {
     Diagnostics,
@@ -57,7 +64,10 @@ pub struct Styler {
     xaml: Xaml,
     /// The colour asked for each role; kept until a restore.
     colors: HashMap<Role, Color>,
-    brushes: HashMap<Role, InstanceHandle>,
+    brushes: HashMap<Role, Brush>,
+    /// Every brush handle we created, including replaced ones, so that one
+    /// of ours is never taken for Explorer's original.
+    ours: HashSet<InstanceHandle>,
     color_path: Option<ColorPath>,
     targets: HashMap<Match, Target>,
 }
@@ -68,6 +78,7 @@ impl Styler {
             xaml: Xaml::new(diagnostics, service),
             colors: HashMap::new(),
             brushes: HashMap::new(),
+            ours: HashSet::new(),
             color_path: None,
             targets: HashMap::new(),
         }
@@ -188,12 +199,12 @@ impl Styler {
         let Some(target) = self.targets.get(&found) else {
             return;
         };
-        let Some(&brush) = self.brushes.get(&target.role) else {
+        let Some(brush) = self.brushes.get(&target.role).map(|b| b.handle) else {
             return;
         };
         let index = target.property_index;
         let current = self.xaml.property(handle, index);
-        if current != Some(brush) {
+        if !current.is_some_and(|value| self.ours.contains(&value)) {
             // Ours was never set, or Explorer has since put its own value
             // there: that value is the one to restore.
             let original = current.map(|value| Original {
@@ -234,21 +245,36 @@ impl Styler {
     }
 
     /// Creates the role's brush if needed and gives it the role's colour.
-    /// Returns whether the brush now has that colour.
+    /// Returns whether the brush now has that colour. If an existing brush
+    /// refuses the colour (its handle may have gone stale), it is replaced
+    /// by a new one, once.
     fn ensure_brush(&mut self, role: Role) -> bool {
         let Some(&color) = self.colors.get(&role) else {
             return false;
         };
-        let brush = match self.brushes.get(&role) {
-            Some(&brush) => brush,
-            None => match self.xaml.create(BRUSH_TYPE, None) {
-                Some(brush) => {
-                    self.brushes.insert(role, brush);
-                    brush
-                }
-                None => return false,
-            },
+        if let Some(brush) = self.brushes.get(&role).map(|b| b.handle) {
+            if self.color_brush(role, brush, color) {
+                return true;
+            }
+            log!("{role:?} brush {brush:#x} refused the colour; creating a new one");
+            self.brushes.remove(&role);
+        }
+        let Some(handle) = self.xaml.create(BRUSH_TYPE, None) else {
+            return false;
         };
+        let object = self.xaml.object(handle);
+        self.ours.insert(handle);
+        self.brushes.insert(
+            role,
+            Brush {
+                handle,
+                _object: object,
+            },
+        );
+        self.color_brush(role, handle, color)
+    }
+
+    fn color_brush(&mut self, role: Role, brush: InstanceHandle, color: Color) -> bool {
         let ok = match self.color_path {
             Some(ColorPath::Diagnostics) => self.color_by_diagnostics(brush, color),
             Some(ColorPath::Interface) => self.color_by_interface(brush, color),

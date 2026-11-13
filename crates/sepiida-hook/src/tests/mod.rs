@@ -260,6 +260,14 @@ fn colours_wait_for_targets_and_explorer_replacements_are_restored() {
         shared.count(&format!("SetProperty 0x5 {FILL_INDEX} 0x1000")),
         2
     );
+
+    // Our brush's handle goes stale: a new brush replaces it, and our old
+    // brush, still on the element, is not taken for Explorer's original.
+    shared.stale.lock().unwrap().insert(0x1000);
+    send(Command::SetColor(Role::Surface, Color::new(2, 2, 2)));
+    assert!(shared.has(&format!("CreateInstance {BRUSH} null -> 0x1004")));
+    assert!(shared.has(&format!("SetProperty 0x1004 {COLOR_INDEX} 0x1005")));
+    assert!(shared.has(&format!("SetProperty 0x5 {FILL_INDEX} 0x1004")));
     send(Command::Restore);
     assert!(shared.has(&format!("SetProperty 0x5 {FILL_INDEX} {EXPLORER_FILL:#x}")));
     assert!(!shared.has(&format!("SetProperty 0x5 {FILL_INDEX} {LIVE_FILL:#x}")));

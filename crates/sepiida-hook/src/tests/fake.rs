@@ -4,7 +4,7 @@
 
 use core::ffi::c_void;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -37,6 +37,9 @@ pub(super) struct Shared {
     pub(super) calls: Mutex<Vec<String>>,
     pub(super) callback: Mutex<Option<SendCallback>>,
     pub(super) values: Mutex<HashMap<(InstanceHandle, u32), InstanceHandle>>,
+    /// Instances whose handle has gone stale, as diagnostics handles do once
+    /// nothing holds the object.
+    pub(super) stale: Mutex<HashSet<InstanceHandle>>,
     pub(super) next_handle: AtomicU64,
 }
 
@@ -147,6 +150,9 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
     ) -> HRESULT {
         self.0
             .record(format!("SetProperty {instance:#x} {index} {value:#x}"));
+        if self.0.stale.lock().unwrap().contains(&instance) {
+            return ERROR_NOT_FOUND.to_hresult();
+        }
         // Like Explorer: once replaced, the original brush's first handle
         // is stale.
         if value == ORIGINAL_FILL {
