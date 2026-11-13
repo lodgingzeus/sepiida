@@ -36,7 +36,7 @@ use windows::{
     core::{GUID, HRESULT, HSTRING, PCWSTR, s, w},
 };
 
-use crate::{guard, log::log, module};
+use crate::{guard, log::log, module, session};
 
 type InitializeXamlDiagnosticsEx =
     unsafe extern "system" fn(PCWSTR, u32, PCWSTR, PCWSTR, GUID, PCWSTR) -> HRESULT;
@@ -215,6 +215,7 @@ fn start_in_process(from: u32) {
                 let pid = unsafe { GetCurrentProcessId() };
                 if let Err(hr) = initialize(pid, from) {
                     log!("in-process attach failed: {hr}");
+                    session::signal_failed();
                 }
             });
             ATTACHING.store(false, Ordering::Release);

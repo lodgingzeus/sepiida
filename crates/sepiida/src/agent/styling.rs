@@ -25,15 +25,23 @@ use tracing::{error, info, warn};
 
 use crate::win::{
     message_box,
-    shell_hook::{self, Method, Taskbar},
+    shell_hook::{self, Method, Outcome, Taskbar},
     theme,
 };
 
 /// How long a freshly attached DLL gets to create its control window.
 const CONTROL_WINDOW_TIMEOUT: Duration = Duration::from_secs(3);
 /// When the agent looks again after an Explorer restart, counted from the
-/// restart. One-off timers after an event, like the tray's re-adds.
-pub const RETRIES_AFTER_RESTART: [Duration; 2] = [Duration::from_secs(4), Duration::from_secs(15)];
+/// restart. One-off timers after an event, like the tray's re-adds; a
+/// look that finds the DLL attached only resends the colours. Explorer's
+/// XAML took over 25 s to come up once on the test VM.
+pub const RETRIES_AFTER_RESTART: [Duration; 5] = [
+    Duration::from_secs(4),
+    Duration::from_secs(15),
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+    Duration::from_secs(120),
+];
 
 pub struct ShellStyling {
     config_path: PathBuf,
@@ -109,9 +117,20 @@ impl ShellStyling {
                 if let Some(error) = attached.unhook_error {
                     warn!("could not remove the attach hook: {error}");
                 }
-                if !attached.ready {
-                    warn!("the styling DLL did not report back; see logs\\hook.log");
-                    return false;
+                match attached.outcome {
+                    Outcome::Ready => {}
+                    Outcome::Failed => {
+                        info!("Explorer's XAML is not ready yet; trying again on the next look");
+                        return false;
+                    }
+                    Outcome::Exited => {
+                        info!("Explorer exited during the attach");
+                        return false;
+                    }
+                    Outcome::TimedOut => {
+                        warn!("the styling DLL did not report back; see logs\\hook.log");
+                        return false;
+                    }
                 }
                 if !shell_hook::wait_until_attached(taskbar.pid, CONTROL_WINDOW_TIMEOUT) {
                     warn!(

@@ -19,6 +19,8 @@ use windows::{
     core::{HSTRING, IUnknown, Interface, Result},
 };
 
+use sepiida_core::shell::protocol;
+
 use crate::{
     log::log,
     watcher::Watcher,
@@ -83,6 +85,7 @@ pub fn attach(site: &IUnknown) -> Result<()> {
                     signal_ready();
                 } else {
                     log!("AdviseVisualTreeChange failed: {hr}");
+                    signal_failed();
                 }
             });
         });
@@ -123,20 +126,27 @@ pub fn detach() {
 
 /// Tells sepiida.exe, if it is waiting, that we are attached.
 fn signal_ready() {
+    signal("ready", protocol::ready_event_name);
+}
+
+/// Tells sepiida.exe, if it is waiting, that this attach gave up.
+pub fn signal_failed() {
+    signal("failed", protocol::failed_event_name);
+}
+
+fn signal(what: &str, event_name: fn(u32) -> String) {
     // SAFETY: plain Win32 calls with a valid name; the handle is closed.
     unsafe {
-        let name = HSTRING::from(sepiida_core::shell::protocol::ready_event_name(
-            GetCurrentProcessId(),
-        ));
+        let name = HSTRING::from(event_name(GetCurrentProcessId()));
         match OpenEventW(EVENT_MODIFY_STATE, false, &name) {
             Ok(event) => {
                 if let Err(error) = SetEvent(event) {
-                    log!("could not signal ready: {error}");
+                    log!("could not signal {what}: {error}");
                 }
                 let _ = CloseHandle(event);
             }
-            // Attached by something other than `sepiida shell attach`.
-            Err(_) => log!("nobody is waiting for the ready signal"),
+            // Attached by something other than sepiida.exe.
+            Err(_) => log!("nobody is waiting for the {what} signal"),
         }
     }
 }

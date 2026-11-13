@@ -58,6 +58,13 @@ pub fn ready_event_name(pid: u32) -> String {
     format!("Local\\sepiida-hook-ready-{pid}")
 }
 
+/// Named event the DLL sets when an in-process attach gives up (no XAML
+/// diagnostics port answered, typically because Explorer's XAML is not up
+/// yet), so sepiida.exe stops waiting at once.
+pub fn failed_event_name(pid: u32) -> String {
+    format!("Local\\sepiida-hook-failed-{pid}")
+}
+
 /// `WM_APP`: the start of the message range private to a window class.
 const WM_APP: u32 = 0x8000;
 // WM_APP + 0x5e1 was version 1's single taskbar colour; never reuse it.
@@ -189,5 +196,6 @@ mod tests {
     #[test]
     fn ready_event_is_per_session_and_process() {
         assert_eq!(ready_event_name(4242), "Local\\sepiida-hook-ready-4242");
+        assert_eq!(failed_event_name(4242), "Local\\sepiida-hook-failed-4242");
     }
 }

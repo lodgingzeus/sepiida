@@ -6,7 +6,7 @@ use sepiida_core::shell::{protocol::Command, rules::Role};
 
 use crate::{
     cli::ShellCommand,
-    win::shell_hook::{self, Attached, Method, ModuleCheck},
+    win::shell_hook::{self, Attached, Method, ModuleCheck, Outcome},
 };
 
 const LOG_HINT: &str = "%LOCALAPPDATA%\\sepiida\\logs\\hook.log";
@@ -55,13 +55,17 @@ fn report(attached: &Attached) {
         print_loaded("while the hook was installed", check);
     }
     print_loaded("now", &attached.loaded);
-    if attached.ready {
-        println!(
+    match attached.outcome {
+        Outcome::Ready => println!(
             "attached: the DLL is watching a XAML thread's visual tree. {LOG_HINT} says \
              whether it found the taskbar; if not, detach and try `--from <next number>`"
-        );
-    } else {
-        println!("the DLL did not report back; see {LOG_HINT}");
+        ),
+        Outcome::Failed => println!(
+            "the DLL found no XAML diagnostics port in Explorer (its XAML may not be up \
+             yet; try again in a few seconds); see {LOG_HINT}"
+        ),
+        Outcome::Exited => println!("Explorer exited during the attach"),
+        Outcome::TimedOut => println!("the DLL did not report back; see {LOG_HINT}"),
     }
 }
 

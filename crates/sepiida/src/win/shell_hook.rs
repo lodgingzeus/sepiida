@@ -23,7 +23,7 @@ use std::{
 
 use sepiida_core::shell::protocol::{
     ATTACH_MESSAGE, CONTROL_WINDOW_CLASS, Command, HOOK_PROC_EXPORT, INITIALIZE_EXPORT,
-    control_window_title, ready_event_name,
+    control_window_title, failed_event_name, ready_event_name,
 };
 use windows::{
     Win32::{
@@ -33,10 +33,7 @@ use windows::{
         },
         System::{
             LibraryLoader::{GetProcAddress, LOAD_LIBRARY_FLAGS, LoadLibraryExW},
-            Threading::{
-                CreateEventW, OpenProcess, PROCESS_SYNCHRONIZE, WaitForMultipleObjects,
-                WaitForSingleObject,
-            },
+            Threading::{CreateEventW, OpenProcess, PROCESS_SYNCHRONIZE, WaitForMultipleObjects},
         },
         UI::WindowsAndMessaging::{
             FindWindowExW, FindWindowW, GetWindowThreadProcessId, HOOKPROC, HWND_MESSAGE,
@@ -107,8 +104,8 @@ pub struct Attached {
     pub replaced: usize,
     /// Remote only: the connection number that answered and its result.
     pub remote_result: Option<(u32, HRESULT)>,
-    /// Whether the DLL confirmed it is watching the visual tree.
-    pub ready: bool,
+    /// How waiting for the DLL ended.
+    pub outcome: Outcome,
     /// Where Explorer has the DLL loaded from, if it has; or why that
     /// could not be checked.
     pub loaded: ModuleCheck,
@@ -182,24 +179,24 @@ pub fn attach(
     }
     let mut loaded_while_hooked = None;
     let mut unhook_error = None;
-    let ready = ReadyEvent::create(taskbar.pid)?;
+    let signals = Signals::create(taskbar.pid)?;
     let library = Library::load(dll)?;
-    let (remote_result, ready) = match method {
+    let (remote_result, outcome) = match method {
         Method::InProcess => {
-            let hooked = attach_in_process(taskbar, &library, from, &ready)?;
+            let hooked = attach_in_process(taskbar, &library, from, &signals)?;
             loaded_while_hooked = Some(hooked.loaded);
             unhook_error = hooked.unhook_error;
-            (None, hooked.confirmed)
+            (None, hooked.outcome)
         }
         Method::Remote => {
             let result = attach_remote(taskbar.pid, &library, from)?;
-            (Some(result), ready.wait(READY_TIMEOUT))
+            (Some(result), signals.wait(READY_TIMEOUT))
         }
     };
     Ok(Attached {
         replaced,
         remote_result,
-        ready,
+        outcome,
         loaded: modules::loaded_module(taskbar.pid, HOOK_DLL),
         loaded_while_hooked,
         unhook_error,
@@ -207,7 +204,7 @@ pub fn attach(
 }
 
 struct Hooked {
-    confirmed: bool,
+    outcome: Outcome,
     loaded: ModuleCheck,
     unhook_error: Option<windows::core::Error>,
 }
@@ -216,7 +213,7 @@ fn attach_in_process(
     taskbar: &Taskbar,
     library: &Library,
     from: u32,
-    ready: &ReadyEvent,
+    signals: &Signals,
 ) -> Result<Hooked, ShellHookError> {
     let proc = library.export(HOOK_PROC_EXPORT)?;
     // SAFETY: the export has the HOOKPROC signature (see the DLL's
@@ -248,13 +245,17 @@ fn attach_in_process(
     };
     // The DLL pins itself inside Explorer before attaching, so the hook can
     // go once the DLL has reported back (or given up).
-    let confirmed = sent.is_ok() && ready.wait(READY_TIMEOUT);
+    let outcome = if sent.is_ok() {
+        signals.wait(READY_TIMEOUT)
+    } else {
+        Outcome::Failed
+    };
     let while_hooked = modules::loaded_module(taskbar.pid, HOOK_DLL);
     // SAFETY: the hook handle from above, removed once.
     let unhook_error = unsafe { UnhookWindowsHookEx(hook) }.err();
     sent.map_err(ShellHookError::Trigger)?;
     Ok(Hooked {
-        confirmed,
+        outcome,
         loaded: while_hooked,
         unhook_error,
     })
@@ -399,51 +400,85 @@ impl Drop for Library {
     }
 }
 
-/// `Local\sepiida-hook-ready-<pid>`, set by the DLL once attached, and the
-/// target process, so that waiting ends at once if it exits (Explorer
-/// restarted mid-attach) instead of after the full timeout.
-struct ReadyEvent {
-    event: HANDLE,
+/// How waiting for the DLL ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// The DLL is watching the visual tree.
+    Ready,
+    /// The DLL gave up: no XAML diagnostics port answered (Explorer's XAML
+    /// is not up yet, or the hook never ran).
+    Failed,
+    /// The target process exited (Explorer restarted mid-attach).
+    Exited,
+    /// Nothing within the timeout.
+    TimedOut,
+}
+
+/// The DLL's ready and failed events (`Local\sepiida-hook-*-<pid>`) and
+/// the target process, so that waiting ends as soon as any of them says
+/// how the attach went.
+struct Signals {
+    ready: HANDLE,
+    failed: HANDLE,
     process: Option<HANDLE>,
 }
 
-impl ReadyEvent {
+impl Signals {
     fn create(pid: u32) -> Result<Self, ShellHookError> {
-        let name = HSTRING::from(ready_event_name(pid));
-        // SAFETY: manual-reset, initially unset, default security (only
-        // this user's processes can open it).
-        let event =
-            unsafe { CreateEventW(None, true, false, &name) }.map_err(ShellHookError::Event)?;
-        // SAFETY: plain call; without the handle the wait falls back to the
-        // event alone.
+        let ready = create_event(&ready_event_name(pid))?;
+        let failed = match create_event(&failed_event_name(pid)) {
+            Ok(failed) => failed,
+            Err(error) => {
+                close(ready);
+                return Err(error);
+            }
+        };
+        // SAFETY: plain call; without the handle a process exit is only
+        // noticed by the timeout.
         let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.ok();
-        Ok(Self { event, process })
+        Ok(Self {
+            ready,
+            failed,
+            process,
+        })
     }
 
-    /// True only if the DLL reported ready within `timeout`.
-    fn wait(&self, timeout: Duration) -> bool {
+    fn wait(&self, timeout: Duration) -> Outcome {
         let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
-        // SAFETY: the handles are owned by `self` and valid. The event is
-        // first, so WAIT_OBJECT_0 means "ready".
-        unsafe {
-            match self.process {
-                Some(process) => {
-                    WaitForMultipleObjects(&[self.event, process], false, millis) == WAIT_OBJECT_0
-                }
-                None => WaitForSingleObject(self.event, millis) == WAIT_OBJECT_0,
-            }
+        let mut handles = vec![self.ready, self.failed];
+        handles.extend(self.process);
+        // SAFETY: the handles are owned by `self` and valid.
+        let result = unsafe { WaitForMultipleObjects(&handles, false, millis) };
+        match result.0.wrapping_sub(WAIT_OBJECT_0.0) {
+            0 => Outcome::Ready,
+            1 => Outcome::Failed,
+            2 if self.process.is_some() => Outcome::Exited,
+            _ => Outcome::TimedOut,
         }
     }
 }
 
-impl Drop for ReadyEvent {
+/// A manual-reset event, initially unset, with default security (only
+/// this user's processes can open it).
+fn create_event(name: &str) -> Result<HANDLE, ShellHookError> {
+    let name = HSTRING::from(name);
+    // SAFETY: plain call with a valid name.
+    unsafe { CreateEventW(None, true, false, &name) }.map_err(ShellHookError::Event)
+}
+
+fn close(handle: HANDLE) {
+    // SAFETY: an owned handle, closed once by the caller's contract.
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+}
+
+impl Drop for Signals {
     fn drop(&mut self) {
-        // SAFETY: owned handles, closed once.
-        unsafe {
-            let _ = CloseHandle(self.event);
-            if let Some(process) = self.process {
-                let _ = CloseHandle(process);
-            }
+        close(self.ready);
+        close(self.failed);
+        if let Some(process) = self.process {
+            close(process);
         }
     }
 }
