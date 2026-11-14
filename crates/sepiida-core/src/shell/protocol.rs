@@ -36,6 +36,12 @@ pub const CONNECTION_PREFIX: &str = "VisualDiagConnection";
 /// threads; the taskbar's is among the first.
 pub const MAX_CONNECTION: u32 = 256;
 
+/// Connection numbers a style-alongside attach tries past the one before
+/// it. Numbers count up with every XAML thread ever created, so further
+/// cores sit close by; scanning all the way to `MAX_CONNECTION` took up to
+/// 16 s in a busy VM (M4 step 3 round 3).
+pub const ALONGSIDE_SPAN: usize = 8;
+
 /// Every connection name to try from number `from` on, in order. A `from`
 /// of 0 counts as 1.
 pub fn connection_names(from: u32) -> impl Iterator<Item = (u32, String)> {

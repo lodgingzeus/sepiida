@@ -1,6 +1,9 @@
-//! Hears when ShellExperienceHost shows a window: the notification centre,
-//! the calendar or a toast. Their XAML exists only while shown, so the
-//! agent can attach the styling DLL only then.
+//! Hears when a sandboxed shell host shows a window: Start, quick
+//! settings, the notification centre, the calendar or a toast. The
+//! notification centre's XAML exists only while shown, so the agent
+//! attaches then; and every host may have been given a new brush while
+//! hidden (Windows swaps them on a light/dark switch), so the agent sends
+//! the colours again whenever a window appears.
 //!
 //! Out-of-context WinEvent hooks for `EVENT_OBJECT_SHOW` and
 //! `EVENT_OBJECT_UNCLOAKED` (Windows may cloak a flyout's window rather
@@ -51,9 +54,9 @@ pub enum FlyoutEventsError {
 }
 
 struct Watch {
-    on_shown: Box<dyn Fn(u32)>,
-    /// Whether each process id seen is ShellExperienceHost.
-    known: HashMap<u32, bool>,
+    on_shown: Box<dyn Fn(Host, u32)>,
+    /// Which sandboxed host each process id seen is, if any.
+    known: HashMap<u32, Option<Host>>,
     last: Option<(u32, Instant)>,
 }
 
@@ -61,9 +64,10 @@ thread_local! {
     static WATCH: RefCell<Option<Watch>> = const { RefCell::new(None) };
 }
 
-/// Starts the hook thread; `on_shown` runs on it with the process id each
-/// time ShellExperienceHost shows a window. Returns once the hook is in.
-pub fn spawn(on_shown: impl Fn(u32) + Send + 'static) -> Result<(), FlyoutEventsError> {
+/// Starts the hook thread; `on_shown` runs on it with the host and process
+/// id each time a sandboxed host shows a window. Returns once the hook is
+/// in.
+pub fn spawn(on_shown: impl Fn(Host, u32) + Send + 'static) -> Result<(), FlyoutEventsError> {
     let (ready_tx, ready_rx) = mpsc::channel();
     thread::Builder::new()
         .name("flyout-events".to_owned())
@@ -149,13 +153,14 @@ fn shown(pid: u32, event: u32) {
         if watch.known.len() > MAX_KNOWN {
             watch.known.clear();
         }
-        let is_host = *watch.known.entry(pid).or_insert_with(|| {
+        let host = *watch.known.entry(pid).or_insert_with(|| {
             processes::exe_name(pid)
-                .is_some_and(|name| name.eq_ignore_ascii_case(Host::ShellExperience.exe()))
+                .and_then(|name| Host::from_exe(&name))
+                .filter(|host| host.is_sandboxed())
         });
-        if !is_host {
+        let Some(host) = host else {
             return;
-        }
+        };
         let now = Instant::now();
         if watch
             .last
@@ -169,7 +174,7 @@ fn shown(pid: u32, event: u32) {
         } else {
             "shown"
         };
-        info!(pid, kind, "ShellExperienceHost window appeared");
-        (watch.on_shown)(pid);
+        info!(?host, pid, kind, "shell host window appeared");
+        (watch.on_shown)(host, pid);
     });
 }

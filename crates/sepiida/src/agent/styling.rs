@@ -85,10 +85,10 @@ impl ShellStyling {
         self.hosts.sync(&colors);
     }
 
-    /// A ShellExperienceHost window appeared (process `pid`).
-    pub fn flyout_shown(&mut self, pid: u32) {
+    /// A window of a sandboxed host appeared (process `pid`).
+    pub fn window_shown(&mut self, host: Host, pid: u32) {
         if self.gate.enabled() {
-            self.hosts.flyout_shown(pid);
+            self.hosts.window_shown(host, pid);
         }
     }
 

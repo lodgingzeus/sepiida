@@ -26,7 +26,7 @@ use std::{
 use sepiida_core::shell::{
     attach_request::AttachRequest,
     hosts::AttachMode,
-    protocol::{ATTACH_MESSAGE, MAX_CONNECTION, TAP_CLSID, connection_names},
+    protocol::{ALONGSIDE_SPAN, ATTACH_MESSAGE, MAX_CONNECTION, TAP_CLSID, connection_names},
 };
 use windows::{
     Win32::{
@@ -63,7 +63,14 @@ pub fn initialize(pid: u32, from: u32, request: &AttachRequest) -> Result<(u32, 
     let initialize = load_initialize()?;
     let not_found = ERROR_NOT_FOUND.to_hresult();
     let mut tried = 0;
-    for (number, name) in connection_names(from) {
+    // A further core sits close to the one before; the rest of the range
+    // is not worth the time.
+    let span = if request.mode == AttachMode::StyleAlongside {
+        ALONGSIDE_SPAN
+    } else {
+        usize::MAX
+    };
+    for (number, name) in connection_names(from).take(span) {
         tried += 1;
         let hr = call_on_fresh_thread(initialize, &name, pid, &path, request);
         if hr == not_found {

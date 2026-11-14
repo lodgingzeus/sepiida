@@ -4,6 +4,12 @@
 //! attached when one of their windows appears, since their XAML only
 //! exists while shown.
 //!
+//! Whenever a host's window appears the colours are sent again, at once
+//! and twice more shortly after: Windows gives a surface a new brush on a
+//! light/dark switch made while it was hidden, and sets the notification
+//! centre's brush only a moment into its opening; colours sent before
+//! that land on a brush nobody sees (M4 step 3 round 3).
+//!
 //! The colours travel with every attach: a host that is hidden runs the
 //! DLL's tree callbacks only once it is shown, and has no control window
 //! to send colours to until then. A host that already has a control
@@ -47,6 +53,9 @@ const RETRIES_AFTER_EXIT: [Duration; 2] = [Duration::from_secs(3), Duration::fro
 /// A flyout's XAML may come up a moment after its window: attach tries.
 const FLYOUT_TRIES: u32 = 3;
 const FLYOUT_RETRY: Duration = Duration::from_millis(300);
+/// When the colours are sent again after a window appeared, counted from
+/// the appearance: during and after its opening animation.
+const RESENDS_AFTER_SHOW: [Duration; 2] = [Duration::from_millis(400), Duration::from_millis(1500)];
 
 /// How one attach went.
 enum Attach {
@@ -64,6 +73,9 @@ pub struct HostStyling {
     granted: bool,
     /// Processes whose exit is being waited for.
     watched: HashSet<u32>,
+    /// Processes attached in this run. One that has no control window yet
+    /// is hidden, not detached: it creates the window once shown.
+    attached: HashSet<u32>,
     guards: HashMap<Host, CrashGuard>,
 }
 
@@ -74,6 +86,7 @@ impl HostStyling {
             colors: Vec::new(),
             granted: false,
             watched: HashSet::new(),
+            attached: HashSet::new(),
             guards: HashMap::new(),
         }
     }
@@ -103,24 +116,61 @@ impl HostStyling {
         }
     }
 
-    /// A ShellExperienceHost window appeared: attaches to it if styling is
-    /// on and it is not attached yet.
-    pub fn flyout_shown(&mut self, pid: u32) {
+    /// A window of `host` appeared while styling is on: attaches if
+    /// needed, and sends the colours now and again shortly after.
+    pub fn window_shown(&mut self, host: Host, pid: u32) {
         if self.colors.is_empty() {
             return;
         }
         if shell_hook::is_attached(pid) {
-            info!(pid, "flyout host already attached");
+            self.send_colors(host, pid);
+        } else if self.attached.contains(&pid) {
+            // Attached while hidden; its control window comes with the
+            // first tree callbacks, before the re-sends below.
+            info!(?host, pid, "attached host shown for the first time");
+        } else if !self.attach_shown(host, pid) {
             return;
         }
+        self.resend_later(pid);
+    }
+
+    /// Attaches to a host whose window just appeared; its XAML may come up
+    /// a moment after the window. Returns whether it attached.
+    fn attach_shown(&mut self, host: Host, pid: u32) -> bool {
         let Some(dll) = self.dll() else {
-            return;
+            return false;
         };
         for _ in 0..FLYOUT_TRIES {
-            match self.attach(Host::ShellExperience, pid, &dll) {
+            match self.attach(host, pid, &dll) {
                 Attach::NoPort => thread::sleep(FLYOUT_RETRY),
-                Attach::Done | Attach::Failed => return,
+                Attach::Done => return true,
+                Attach::Failed => return false,
             }
+        }
+        false
+    }
+
+    /// Sends the colours to `pid` again after each of `RESENDS_AFTER_SHOW`,
+    /// from a short-lived thread (posting needs no agent state).
+    fn resend_later(&self, pid: u32) {
+        let colors = self.colors.clone();
+        let spawned = thread::Builder::new()
+            .name("shell-resend".to_owned())
+            .spawn(move || {
+                let mut waited = Duration::ZERO;
+                for at in RESENDS_AFTER_SHOW {
+                    thread::sleep(at.saturating_sub(waited));
+                    waited = at;
+                    for &(role, color) in &colors {
+                        if let Err(error) = shell_hook::send(pid, Command::SetColor(role, color)) {
+                            warn!(pid, "could not send the shell colours again: {error}");
+                            return;
+                        }
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            warn!("could not schedule sending the colours again: {error}");
         }
     }
 
@@ -129,6 +179,7 @@ impl HostStyling {
     /// attach.
     pub fn host_exited(&mut self, host: Host, pid: u32, at: Instant) -> Option<u32> {
         self.watched.remove(&pid);
+        self.attached.remove(&pid);
         info!(?host, pid, "shell host exited");
         if self.colors.is_empty() {
             return None;
@@ -140,6 +191,7 @@ impl HostStyling {
     /// Restores and detaches every copy of the DLL in the sandboxed hosts.
     pub fn stop(&mut self) {
         self.colors.clear();
+        self.attached.clear();
         for guard in self.guards.values_mut() {
             guard.reset();
         }
@@ -170,6 +222,7 @@ impl HostStyling {
             .attached(Instant::now());
         match shell_hook::attach_sandboxed(pid, dll, &self.colors, Duration::ZERO) {
             Ok(attached) => {
+                self.attached.insert(pid);
                 info!(
                     ?host,
                     pid,

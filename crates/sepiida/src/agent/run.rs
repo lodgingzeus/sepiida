@@ -145,7 +145,7 @@ fn run_loop(
                     Event::ShellHostExited(host, pid, at) => {
                         agent.styling.host_exited(host, pid, at);
                     }
-                    Event::ShellFlyoutShown(pid) => agent.styling.flyout_shown(pid),
+                    Event::ShellWindowShown(host, pid) => agent.styling.window_shown(host, pid),
                     _ => {}
                 }
                 if scheduler.handle(event, Instant::now()) == Flow::Quit {
@@ -211,12 +211,13 @@ fn explorer_restarted(events: &Sender<Event>) {
     }
 }
 
-/// The notification centre, calendar and toasts have XAML only while
-/// shown; the agent attaches to them when one of their windows appears.
-/// Without the hook they stay unstyled; nothing else depends on it.
+/// Shell host windows appearing: the notification centre has XAML only
+/// while shown, and any host may have a new brush since it was last
+/// shown. Without the hook those stay unstyled until the next apply;
+/// nothing else depends on it.
 fn watch_flyouts(events: Sender<Event>) {
-    let watched = flyout_events::spawn(move |pid| {
-        let _ = events.send(Event::ShellFlyoutShown(pid));
+    let watched = flyout_events::spawn(move |host, pid| {
+        let _ = events.send(Event::ShellWindowShown(host, pid));
     });
     if let Err(error) = watched {
         warn!("{:#}", anyhow::Error::new(error));

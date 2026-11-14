@@ -25,10 +25,12 @@ pub enum Event {
     /// taking its styling along. For the agent's crash guard; not a change
     /// by itself (later rechecks attach to the new process).
     ShellHostExited(Host, u32, Instant),
-    /// A window of ShellExperienceHost (process id) appeared: a flyout
-    /// whose XAML only exists while shown, to attach to at once. Never
-    /// schedules an apply.
-    ShellFlyoutShown(u32),
+    /// A window of a sandboxed shell host (this process id) appeared:
+    /// Start, quick settings, the notification centre. The agent attaches
+    /// if needed and re-sends the colours (Windows may have given the
+    /// surface a new brush, e.g. after a light/dark switch while it was
+    /// hidden). Never schedules an apply.
+    ShellWindowShown(Host, u32),
     /// The user asked for an apply; skips the wait and ignores a pause.
     ApplyNow,
     Pause,
@@ -97,7 +99,7 @@ impl Scheduler {
                     self.schedule(now);
                 }
             }
-            Event::ShellHostExited(..) | Event::ShellFlyoutShown(_) => {}
+            Event::ShellHostExited(..) | Event::ShellWindowShown(..) => {}
             Event::Quit => return Flow::Quit,
         }
         Flow::Continue
@@ -170,7 +172,7 @@ mod tests {
         let mut s = Scheduler::new(SETTLE, MAX);
         let t0 = Instant::now();
         // Handled by the agent loop itself; nothing to schedule.
-        s.handle(Event::ShellFlyoutShown(42), t0);
+        s.handle(Event::ShellWindowShown(Host::ShellExperience, 42), t0);
         s.handle(Event::ShellHostExited(Host::StartMenu, 7, t0), t0);
         assert_eq!(s.deadline(), None);
         s.handle(Event::ExplorerRestarted(t0), t0);
