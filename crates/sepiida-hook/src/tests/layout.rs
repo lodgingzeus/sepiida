@@ -145,3 +145,36 @@ fn an_acrylic_value_waits_for_its_colour_and_follows_it() {
     send(Command::Detach);
     wait_until("Unadvise", || shared.has("Unadvise"));
 }
+
+static TWO_ON_ONE: [Rule; 2] = [
+    look("RadiusX", Value::Length(8.0)),
+    look("RadiusX", Value::Length(12.0)),
+];
+
+#[test]
+fn a_later_rule_on_the_same_property_wins() {
+    let _serial = serial();
+    crate::host::tests::pretend_with(sepiida_core::shell::hosts::Host::Explorer, &TWO_ON_ONE);
+    let (shared, site) = new_fake();
+    let tap = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap.SetSite(&site) }.unwrap();
+    let callback = wait_for_callback(&shared);
+    add_taskbar(&callback);
+
+    send(Command::SetLook(true));
+    assert!(shared.has("CreateInstance Windows.Foundation.Double 12 -> 0x1000"));
+    assert!(shared.has(&format!("SetProperty 0x5 {RADIUS_X_INDEX} 0x1000")));
+    assert!(!shared.has("CreateInstance Windows.Foundation.Double 8 -> 0x1000"));
+    assert_eq!(
+        shared
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with(&format!("SetProperty 0x5 {RADIUS_X_INDEX} ")))
+            .count(),
+        1
+    );
+
+    send(Command::Detach);
+    wait_until("Unadvise", || shared.has("Unadvise"));
+}

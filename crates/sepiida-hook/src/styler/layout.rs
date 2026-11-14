@@ -94,18 +94,25 @@ impl Layouts {
             return;
         }
         // Two rules on one property would stack: the second would save the
-        // first one's value as the original. The first rule wins.
-        if let Some((_, first)) = self
+        // first one's value as the original. As in Windhawk, the later rule
+        // (higher id) wins; the earlier one's value is put back first.
+        if let Some((&other, kept)) = self
             .targets
             .iter()
             .find(|(m, t)| m.handle == found.handle && t.property == property)
         {
+            let kept_label = kept.label;
+            if other.rule > found.rule || !self.drop_target(xaml, other) {
+                log!(
+                    "{label} {:#x}: {property} already set by {kept_label}; left to it",
+                    found.handle
+                );
+                return;
+            }
             log!(
-                "{label} {:#x}: {property} already set by {}; left to it",
-                found.handle,
-                first.label
+                "{label} {:#x}: {property} taken over from {kept_label}",
+                found.handle
             );
-            return;
         }
         log!("{label} found: {:#x}", found.handle);
         self.targets.insert(
@@ -244,6 +251,11 @@ impl Layouts {
     /// Turns the look on (writes every value) or off (puts every original
     /// back).
     pub fn set_on(&mut self, xaml: &Xaml, on: bool) {
+        // The agent sends "on" with every colour update; targets found
+        // while on are styled as they appear, so a repeat has nothing to do.
+        if on && self.on {
+            return;
+        }
         self.on = on;
         // In rule order, so that the log reads the same every time.
         let mut found: Vec<Match> = self.targets.keys().copied().collect();
@@ -473,6 +485,21 @@ impl Layouts {
             // Kept, so that a later restore tries again.
             target.applied = Some(applied);
         }
+    }
+
+    /// Puts `found`'s original back and forgets the target. False (target
+    /// kept) if the original could not be put back.
+    fn drop_target(&mut self, xaml: &Xaml, found: Match) -> bool {
+        self.restore(xaml, found);
+        if self
+            .targets
+            .get(&found)
+            .is_some_and(|t| t.applied.is_some())
+        {
+            return false;
+        }
+        self.targets.remove(&found);
+        true
     }
 
     /// Puts every original back and turns the look off. The colours are

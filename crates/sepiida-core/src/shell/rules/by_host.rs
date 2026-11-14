@@ -5,11 +5,14 @@
 use std::sync::OnceLock;
 
 use super::{
-    flyouts::{ADDITIONS, FLYOUT_OVERLAYS, TINTED_GLASS},
+    flyouts::FLYOUT_OVERLAYS,
     rule::Rule,
     start::START_RULES,
     taskbar::TASKBAR_RULES,
-    windhawk::{Skipped, build},
+    windhawk::{Skipped, Theme, build_all},
+    window_glass::{
+        FLYOUT_ADDITIONS, FLYOUT_CONTROLS, FLYOUT_PANELS, START, TASKBAR, TASKBAR_ADDITIONS,
+    },
 };
 use crate::shell::hosts::Host;
 
@@ -18,35 +21,55 @@ struct RuleSet {
     skipped: Vec<Skipped>,
 }
 
+impl RuleSet {
+    /// Our hand-written rules first, then the themes' rules.
+    fn new(own: &[Rule], themes: &[&Theme]) -> Self {
+        let built = build_all(themes);
+        let mut rules = own.to_vec();
+        rules.extend(built.rules);
+        Self {
+            rules,
+            skipped: built.skipped,
+        }
+    }
+}
+
+fn taskbar() -> &'static RuleSet {
+    static SET: OnceLock<RuleSet> = OnceLock::new();
+    SET.get_or_init(|| RuleSet::new(TASKBAR_RULES, &[&TASKBAR, &TASKBAR_ADDITIONS]))
+}
+
+fn start() -> &'static RuleSet {
+    static SET: OnceLock<RuleSet> = OnceLock::new();
+    SET.get_or_init(|| RuleSet::new(START_RULES, &[&START]))
+}
+
 fn flyouts() -> &'static RuleSet {
     static SET: OnceLock<RuleSet> = OnceLock::new();
     SET.get_or_init(|| {
-        let (mut rules, mut skipped) = (Vec::new(), Vec::new());
-        for theme in [&TINTED_GLASS, &ADDITIONS] {
-            let built = build(theme);
-            rules.extend(built.rules);
-            skipped.extend(built.skipped);
-        }
-        rules.extend_from_slice(FLYOUT_OVERLAYS);
-        RuleSet { rules, skipped }
+        RuleSet::new(
+            FLYOUT_OVERLAYS,
+            &[&FLYOUT_PANELS, &FLYOUT_CONTROLS, &FLYOUT_ADDITIONS],
+        )
     })
+}
+
+fn set_for(host: Host) -> &'static RuleSet {
+    match host {
+        Host::Explorer => taskbar(),
+        Host::StartMenu => start(),
+        Host::ShellHost | Host::ShellExperience => flyouts(),
+    }
 }
 
 /// The rule set for elements in `host`.
 pub fn rules_for(host: Host) -> &'static [Rule] {
-    match host {
-        Host::Explorer => TASKBAR_RULES,
-        Host::StartMenu => START_RULES,
-        Host::ShellHost | Host::ShellExperience => &flyouts().rules,
-    }
+    &set_for(host).rules
 }
 
 /// Theme entries left out of `host`'s rule set, and why; for the log.
 pub fn skipped_for(host: Host) -> &'static [Skipped] {
-    match host {
-        Host::Explorer | Host::StartMenu => &[],
-        Host::ShellHost | Host::ShellExperience => &flyouts().skipped,
-    }
+    &set_for(host).skipped
 }
 
 #[cfg(test)]
@@ -67,25 +90,51 @@ mod tests {
         }
     }
 
+    fn skipped(host: Host) -> Vec<(&'static str, &'static str)> {
+        skipped_for(host)
+            .iter()
+            .map(|s| {
+                let feature = KNOWN_GAPS
+                    .iter()
+                    .copied()
+                    .find(|gap| s.reason.contains(gap))
+                    .unwrap_or("unexpected");
+                (s.target, feature)
+            })
+            .collect()
+    }
+
+    /// Engine features the pasted themes use and we lack; the last is an
+    /// empty value (`Background=`), which Windhawk reads as "clear".
+    const KNOWN_GAPS: [&str; 4] = [
+        "attached property",
+        "[Property=Value]",
+        "@VisualState",
+        "\"\" is not a plain value",
+    ];
+
     /// Theme entries left out are known: each is a feature the engine
     /// lacks. A new skip means a pasted line needs a look.
     #[test]
     fn only_known_theme_entries_are_left_out() {
-        let flyouts: Vec<&str> = skipped_for(Host::ShellHost)
-            .iter()
-            .map(|s| s.target)
-            .collect();
-        // Both set `Grid.Column` (attached properties): media thumbnail
-        // layout.
+        for host in Host::ALL {
+            for (target, feature) in skipped(host) {
+                assert_ne!(feature, "unexpected", "{host:?}: {target}");
+            }
+        }
+        assert!(skipped(Host::Explorer).is_empty());
+        let start: Vec<&str> = skipped(Host::StartMenu).iter().map(|s| s.0).collect();
         assert_eq!(
-            flyouts,
+            start,
             [
-                "Grid#ThumbnailImage",
-                "StackPanel#PrimaryAndSecondaryTextContainer"
+                "Windows.UI.Xaml.Controls.Grid#UndockedRoot",
+                "Windows.UI.Xaml.Controls.GridView#PinnedList > Border > Windows.UI.Xaml.Controls.ScrollViewer",
             ]
         );
-        assert!(skipped_for(Host::Explorer).is_empty());
-        assert!(skipped_for(Host::StartMenu).is_empty());
+        // Quick settings button corners ([Property=Value]), media layout
+        // and the toast peek position (Grid.Row/Column), media button
+        // colours (@CommonStates).
+        assert_eq!(skipped(Host::ShellHost).len(), 13);
     }
 
     #[test]

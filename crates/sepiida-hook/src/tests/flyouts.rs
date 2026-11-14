@@ -1,8 +1,8 @@
 //! The flyouts in ShellExperienceHost, with the shipped rules: notification
 //! cards get a solid fill of the raised surface colour that is painted
 //! again when Windows puts its own brush back (but not after a restore),
-//! and round corners when they appear while the look is on; the
-//! calendar's layers turn transparent with the look and come back.
+//! and round corners when they appear while the look is on; a layer the
+//! theme clears turns transparent with the look and comes back.
 
 use sepiida_core::{
     Color,
@@ -17,6 +17,8 @@ use super::{add, fake::*, new_tap, send, serial, wait_for_callback, wait_until};
 use crate::xamlom::*;
 
 const PLATING: InstanceHandle = 40;
+/// The plating's parent: WindowGlass selects `Grid > Border#ItemOpaquePlating`.
+const CARD_GRID: InstanceHandle = 39;
 /// Windows' shared card brush, and the one it puts back after a switch.
 const WINDOWS_CARD: InstanceHandle = 0x500;
 const WINDOWS_CARD_AFTER_SWITCH: InstanceHandle = 0x501;
@@ -52,7 +54,14 @@ fn tree_activity(callback: &IVisualTreeServiceCallback2, handle: InstanceHandle)
 fn a_card_brush_windows_puts_back_is_painted_again_but_not_after_restore() {
     let _serial = serial();
     let (shared, callback) = attach_to_notifications();
-    add(&callback, PLATING, 0, BORDER_TYPE, "ItemOpaquePlating");
+    add(&callback, CARD_GRID, 0, GRID_TYPE, "");
+    add(
+        &callback,
+        PLATING,
+        CARD_GRID,
+        BORDER_TYPE,
+        "ItemOpaquePlating",
+    );
     send(Command::SetColor(
         Role::SurfaceRaised,
         Color::new(0x30, 0x40, 0x50),
@@ -95,7 +104,7 @@ fn a_card_that_appears_while_the_look_is_on_gets_round_corners() {
         shared
             .calls()
             .iter()
-            .any(|c| c.starts_with("CreateInstance Windows.UI.Xaml.CornerRadius 14,14,14,14"))
+            .any(|c| c.starts_with("CreateInstance Windows.UI.Xaml.CornerRadius 12,12,12,12"))
     );
     assert!(shared.calls().iter().any(|c| c.starts_with(&corners)));
 
@@ -105,7 +114,7 @@ fn a_card_that_appears_while_the_look_is_on_gets_round_corners() {
 }
 
 #[test]
-fn the_look_makes_the_calendar_layer_transparent_and_puts_it_back() {
+fn the_look_makes_the_toast_layer_transparent_and_puts_it_back() {
     let _serial = serial();
     let (shared, callback) = attach_to_notifications();
     const LAYER: InstanceHandle = 50;
@@ -113,8 +122,8 @@ fn the_look_makes_the_calendar_layer_transparent_and_puts_it_back() {
         &callback,
         LAYER,
         0,
-        "Windows.UI.Xaml.Controls.ScrollViewer",
-        "CalendarControlScrollViewer",
+        "ActionCenter.FlexibleToastView",
+        "FlexibleNormalToastView",
     );
     let set = format!("SetProperty {LAYER:#x} {BACKGROUND_INDEX} ");
     assert!(!shared.calls().iter().any(|c| c.starts_with(&set)));
@@ -145,8 +154,8 @@ fn a_look_brush_windows_replaces_is_set_again_and_its_brush_restored() {
         &callback,
         LAYER,
         0,
-        "Windows.UI.Xaml.Controls.ScrollViewer",
-        "CalendarControlScrollViewer",
+        "ActionCenter.FlexibleToastView",
+        "FlexibleNormalToastView",
     );
     send(Command::SetLook(true));
     let ours = format!("SetProperty {LAYER:#x} {BACKGROUND_INDEX} 0x1000");

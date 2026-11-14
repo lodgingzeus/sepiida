@@ -136,6 +136,12 @@ const VARS: &[(&str, Var)] = &[
             opacity: 0.5,
         },
     ),
+    ("Pane", Var::Acrylic(Role::Surface)),
+    ("Edge", Var::Xaml("<SolidColorBrush Color=\"#50808080\" />")),
+    (
+        "Bad",
+        Var::Xaml("<ImageBrush ImageSource=\"https://x/a.png\"/>"),
+    ),
 ];
 
 fn effects(target: &'static str, styles: &'static [&'static str]) -> Built {
@@ -297,5 +303,95 @@ fn a_windhawk_blur_keeps_its_amount_and_tint_alpha() {
             role: Role::Surface,
             opacity: 0.2
         })
+    );
+}
+
+#[test]
+fn a_plain_value_after_colon_equals_is_read_like_equals() {
+    let built = effects(
+        "Border",
+        &[
+            "CornerRadius:=7",
+            "Background:=Transparent",
+            "MaxWidth:=Auto",
+        ],
+    );
+    assert!(built.skipped.is_empty(), "{:?}", built.skipped);
+    let got: Vec<Effect> = built.rules.iter().map(|r| r.effect).collect();
+    assert_eq!(
+        got,
+        [
+            Effect::Set(Value::Text("7")),
+            Effect::Set(Value::Transparent),
+            Effect::Set(Value::Auto),
+        ]
+    );
+}
+
+#[test]
+fn text_variables_are_replaced_inside_a_value() {
+    let built = effects("Grid", &["CornerRadius=$Radius,0,0,$Radius"]);
+    assert_eq!(built.rules[0].effect, Effect::Set(Value::Text("14,0,0,14")));
+    for styles in [&["Margin=$Radius,$Nope"][..], &["Margin=$Radius,$Base"][..]] {
+        let styles: &'static [&'static str] = Box::leak(styles.to_vec().into_boxed_slice());
+        let built = effects("Grid", styles);
+        assert!(built.rules.is_empty(), "{styles:?}");
+        assert_eq!(built.skipped.len(), 1, "{styles:?}");
+    }
+}
+
+#[test]
+fn acrylic_and_xaml_variables_are_look_values() {
+    let built = effects("Border", &["Background:=$Pane", "BorderBrush:=$Edge"]);
+    let got: Vec<Effect> = built.rules.iter().map(|r| r.effect).collect();
+    assert_eq!(
+        got,
+        [
+            Effect::Set(Value::Acrylic(Role::Surface)),
+            Effect::Set(Value::Xaml("<SolidColorBrush Color=\"#50808080\" />")),
+        ]
+    );
+    let refused = effects("Border", &["Background:=$Bad"]);
+    assert!(refused.rules.is_empty());
+    assert_eq!(refused.skipped.len(), 1);
+}
+
+#[test]
+fn a_later_line_for_the_same_target_and_property_wins() {
+    let theme = Theme {
+        targets: &[
+            ("Grid#A", &["Width=1", "Height=2"]),
+            ("Grid#B", &["Width=3"]),
+            ("Grid#A", &["Width=4", "Background:=$Glass"]),
+            ("Grid#A", &["Background:=$Base"]),
+        ],
+        vars: VARS,
+    };
+    let built = build(&theme);
+    let got: Vec<(&str, &str, Effect)> = built
+        .rules
+        .iter()
+        .map(|r| (r.label, r.property, r.effect))
+        .collect();
+    let blur = Value::Blur {
+        amount: 18.0,
+        role: Role::Surface,
+        opacity: 0.5,
+    };
+    let tint = Effect::Color {
+        paint: Paint::Tint,
+        role: Role::Surface,
+    };
+    assert_eq!(
+        got,
+        [
+            ("Grid#A", "Height", Effect::Set(Value::Text("2"))),
+            ("Grid#B", "Width", Effect::Set(Value::Text("3"))),
+            ("Grid#A", "Width", Effect::Set(Value::Text("4"))),
+            // The blur's look value stays; its tint is replaced by the
+            // later colour of the same kind.
+            ("Grid#A", "Background", Effect::Set(blur)),
+            ("Grid#A", "Background", tint),
+        ]
     );
 }

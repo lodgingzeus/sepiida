@@ -1,6 +1,6 @@
 //! Shell styling driven by the agent: attaches the hook DLL to Explorer
 //! and the sandboxed hosts (`hosts`) while the setting is on, sends them
-//! the palette's colours after every apply, and takes the styling down
+//! the palette's colours and turns the look on after every apply, and takes the styling down
 //! when the setting goes off or the agent quits. Crash guards turn the
 //! setting off if Explorer or a host keeps dying soon after an attach.
 
@@ -117,6 +117,10 @@ impl ShellStyling {
                 return;
             }
             info!(?role, %color, system_dark, "shell colour sent");
+        }
+        // After the colours: the look's glass is made in their colour.
+        if let Err(error) = shell_hook::send(taskbar.pid, Command::SetLook(true)) {
+            warn!("could not turn the shell look on: {error}");
         }
     }
 

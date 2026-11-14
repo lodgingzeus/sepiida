@@ -44,8 +44,9 @@ taskbar, Start and flyouts\" is on in the settings):
   opacity <0-100|default>
                      tint opacity of the tinted surfaces, in percent, or
                      Windows' own
-  look <on|off>      turn the look (taskbar layout) on or off; colours stay.
-                     Not kept across an Explorer restart yet
+  look <on|off>      turn the look (layout and glass) on or off; colours
+                     stay. A running agent turns it on again with its next
+                     colour update
   restore            put the original backgrounds and layout back
   detach             restore and stop watching (the DLL stays loaded until
                      the process restarts)

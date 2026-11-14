@@ -167,13 +167,9 @@ impl HostStyling {
                 for at in RESENDS_AFTER_SHOW {
                     thread::sleep(at.saturating_sub(waited));
                     waited = at;
-                    for &(role, color) in &colors {
-                        // No control window yet (still opening) or gone:
-                        // skip this round, the next may find one.
-                        if shell_hook::send(pid, Command::SetColor(role, color)).is_err() {
-                            break;
-                        }
-                    }
+                    // No control window yet (still opening) or gone: skip
+                    // this round, the next may find one.
+                    let _ = send_style(pid, &colors);
                 }
             });
         if let Err(error) = spawned {
@@ -272,13 +268,10 @@ impl HostStyling {
     }
 
     fn send_colors(&self, host: Host, pid: u32) {
-        for &(role, color) in &self.colors {
-            if let Err(error) = shell_hook::send(pid, Command::SetColor(role, color)) {
-                warn!(?host, pid, "could not send the shell colours: {error}");
-                return;
-            }
+        match send_style(pid, &self.colors) {
+            Ok(()) => info!(?host, pid, "shell colours and look sent"),
+            Err(error) => warn!(?host, pid, "could not send the shell colours: {error}"),
         }
-        info!(?host, pid, "shell colours sent");
     }
 
     /// Reports the exit of `pid` to the agent, then asks it to look again
@@ -327,4 +320,17 @@ impl HostStyling {
         }
         Some(dll)
     }
+}
+
+/// Sends the colours, then turns the look on: a copy of the DLL that is
+/// styling shows the full look, without a `shell look on`. Sent with
+/// every colour update and re-send, so XAML threads and processes that
+/// came up since (a reopened flyout, a restarted host) get it too; the DLL
+/// ignores it while the look is already on.
+pub fn send_style(pid: u32, colors: &[(Role, Color)]) -> Result<(), ShellHookError> {
+    for &(role, color) in colors {
+        shell_hook::send(pid, Command::SetColor(role, color))?;
+    }
+    shell_hook::send(pid, Command::SetLook(true))?;
+    Ok(())
 }
