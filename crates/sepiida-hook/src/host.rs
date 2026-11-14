@@ -34,6 +34,10 @@ pub fn current() -> Option<Host> {
 
 /// The rules for this process; none outside the known hosts.
 pub fn rules() -> &'static [Rule] {
+    #[cfg(all(test, windows))]
+    if let Some(rules) = *tests::RULES.lock().unwrap_or_else(|e| e.into_inner()) {
+        return rules;
+    }
     current().map_or(&[], rules_for)
 }
 
@@ -41,13 +45,24 @@ pub fn rules() -> &'static [Rule] {
 pub mod tests {
     use std::sync::Mutex;
 
-    use sepiida_core::shell::hosts::Host;
+    use sepiida_core::shell::{hosts::Host, rules::Rule};
 
     /// The host the DLL's tests pretend to run in: the test runner is not
     /// a shell process.
     pub static OVERRIDE: Mutex<Option<Host>> = Mutex::new(None);
+    /// Rules used instead of the host's own, for paths no shipped rule
+    /// takes (solid paint).
+    pub static RULES: Mutex<Option<&'static [Rule]>> = Mutex::new(None);
 
+    /// Pretends to be `host`, with its own rules.
     pub fn pretend(host: Host) {
         *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(host);
+        *RULES.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// Pretends to be `host`, with `rules` instead of its own.
+    pub fn pretend_with(host: Host, rules: &'static [Rule]) {
+        pretend(host);
+        *RULES.lock().unwrap_or_else(|e| e.into_inner()) = Some(rules);
     }
 }

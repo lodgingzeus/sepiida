@@ -123,21 +123,20 @@ impl Styler {
     /// take the colour, no solid target is painted and the previous colour
     /// (if any) stays: an uncoloured brush would make the surface
     /// transparent.
+    /// Brushes of `role` that no element holds now (hidden surfaces) get
+    /// the colour too.
     pub fn set_color(&mut self, role: Role, color: Color) {
         self.colors.insert(role, color);
         let solid = self.targets_of(role, Paint::Solid);
         let tinted = self.targets_of(role, Paint::Tint);
-        if solid.is_empty() && tinted.is_empty() {
-            log!("no target for {role:?} on this thread; colour kept for later");
-            return;
-        }
         if !solid.is_empty() && self.ensure_brush(role) {
-            for found in solid {
+            for &found in &solid {
                 self.paint(found);
             }
         }
-        for found in tinted {
-            self.tint(found);
+        let hidden = self.tint_all(role, &tinted);
+        if solid.is_empty() && tinted.is_empty() && hidden == 0 {
+            log!("no target for {role:?} on this thread; colour kept for later");
         }
     }
 
@@ -152,9 +151,22 @@ impl Styler {
             log!("{role:?} has no colour yet; opacity kept for later");
             return;
         }
-        for found in self.targets_of(role, Paint::Tint) {
+        let tinted = self.targets_of(role, Paint::Tint);
+        self.tint_all(role, &tinted);
+    }
+
+    /// One colour pass for `role`: tints `targets`, then the role's
+    /// remembered brushes no target holds. Returns how many of those.
+    fn tint_all(&mut self, role: Role, targets: &[Match]) -> usize {
+        self.tints.begin_pass();
+        for &found in targets {
             self.tint(found);
         }
+        let Some(&color) = self.colors.get(&role) else {
+            return 0;
+        };
+        let opacity = self.opacities.get(&role).copied();
+        self.tints.retint_others(role, color, opacity)
     }
 
     pub fn restore_all(&mut self) {
@@ -238,12 +250,14 @@ impl Styler {
             return;
         };
         let opacity = self.opacities.get(&role).copied();
-        self.tints.apply(&self.xaml, value, color, opacity);
+        self.tints.apply(&self.xaml, value, role, color, opacity);
         // Recorded even if the value refused the tint (not acrylic), so
         // the re-check does not retry it on every tree change.
         if let Some(target) = self.targets.get_mut(&found) {
             target.tinted = Some(value);
         }
+        let in_use: Vec<InstanceHandle> = self.targets.values().filter_map(|t| t.tinted).collect();
+        self.tints.trim(&in_use);
     }
 
     /// Tints every tinted target whose brush changed since it was last

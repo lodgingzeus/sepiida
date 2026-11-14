@@ -17,8 +17,13 @@
 //!
 //! Each host process is watched for its exit (a wait on its handle, no
 //! polling); the agent then looks again a little later to attach to the
-//! new process. A host that keeps exiting right after an attach trips its
-//! crash guard, like Explorer does.
+//! new process. A host that keeps crashing right after an attach trips its
+//! crash guard, like Explorer does; an exit whose code shows no crash
+//! (Windows ending or restarting the host) is not counted.
+//!
+//! A hidden host attached with the current colours is not attached again:
+//! it picks them up from that attach once shown. Only new colours need a
+//! new attach, as it has no control window to send them to yet.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -32,7 +37,7 @@ use sepiida_core::{
     Color,
     schedule::Event,
     shell::{
-        crash_guard::{CrashGuard, Verdict},
+        crash_guard::{CrashGuard, Verdict, is_crash_exit},
         hosts::Host,
         protocol::Command,
         rules::Role,
@@ -73,9 +78,10 @@ pub struct HostStyling {
     granted: bool,
     /// Processes whose exit is being waited for.
     watched: HashSet<u32>,
-    /// Processes attached in this run. One that has no control window yet
-    /// is hidden, not detached: it creates the window once shown.
-    attached: HashSet<u32>,
+    /// Processes attached in this run, with the colours they were attached
+    /// with. One that has no control window yet is hidden, not detached:
+    /// it creates the window once shown.
+    attached: HashMap<u32, Vec<(Role, Color)>>,
     guards: HashMap<Host, CrashGuard>,
 }
 
@@ -86,7 +92,7 @@ impl HostStyling {
             colors: Vec::new(),
             granted: false,
             watched: HashSet::new(),
-            attached: HashSet::new(),
+            attached: HashMap::new(),
             guards: HashMap::new(),
         }
     }
@@ -109,7 +115,7 @@ impl HostStyling {
             for process in found {
                 if shell_hook::is_attached(process.pid) {
                     self.send_colors(host, process.pid);
-                } else if KEPT_ATTACHED.contains(&host) {
+                } else if KEPT_ATTACHED.contains(&host) && !self.has_current_colors(process.pid) {
                     self.attach(host, process.pid, &dll);
                 }
             }
@@ -124,7 +130,7 @@ impl HostStyling {
         }
         if shell_hook::is_attached(pid) {
             self.send_colors(host, pid);
-        } else if self.attached.contains(&pid) {
+        } else if self.attached.contains_key(&pid) {
             // Attached while hidden; its control window comes with the
             // first tree callbacks, before the re-sends below.
             info!(?host, pid, "attached host shown for the first time");
@@ -175,18 +181,40 @@ impl HostStyling {
         }
     }
 
-    /// A watched host exited at `at`. Returns the crash count if styling
-    /// should be turned off because the host keeps dying right after an
-    /// attach.
-    pub fn host_exited(&mut self, host: Host, pid: u32, at: Instant) -> Option<u32> {
+    /// A watched host exited with `exit_code` at `at`. Returns the crash
+    /// count if styling should be turned off because the host keeps
+    /// crashing right after an attach.
+    pub fn host_exited(
+        &mut self,
+        host: Host,
+        pid: u32,
+        exit_code: Option<u32>,
+        at: Instant,
+    ) -> Option<u32> {
         self.watched.remove(&pid);
         self.attached.remove(&pid);
-        info!(?host, pid, "shell host exited");
+        let crashed = is_crash_exit(exit_code);
+        info!(
+            ?host,
+            pid,
+            exit_code = exit_code.map(|code| format!("{code:#x}")),
+            crashed,
+            "shell host exited"
+        );
         if self.colors.is_empty() {
             return None;
         }
         let guard = self.guards.entry(host).or_default();
+        if !crashed {
+            guard.exited_cleanly();
+            return None;
+        }
         (guard.explorer_restarted(at) == Verdict::Disable).then(|| guard.crashes())
+    }
+
+    /// Whether `pid` was attached in this run with the colours in use now.
+    fn has_current_colors(&self, pid: u32) -> bool {
+        self.attached.get(&pid) == Some(&self.colors)
     }
 
     /// Restores and detaches every copy of the DLL in the sandboxed hosts.
@@ -223,7 +251,7 @@ impl HostStyling {
             .attached(Instant::now());
         match shell_hook::attach_sandboxed(pid, dll, &self.colors, Duration::ZERO) {
             Ok(attached) => {
-                self.attached.insert(pid);
+                self.attached.insert(pid, self.colors.clone());
                 info!(
                     ?host,
                     pid,
@@ -260,8 +288,8 @@ impl HostStyling {
             return;
         }
         let events = self.events.clone();
-        processes::wait_for_exit(pid, "shell-host-exit", move || {
-            let _ = events.send(Event::ShellHostExited(host, pid, Instant::now()));
+        processes::wait_for_exit(pid, "shell-host-exit", move |exit_code| {
+            let _ = events.send(Event::ShellHostExited(host, pid, exit_code, Instant::now()));
             for delay in RETRIES_AFTER_EXIT {
                 let events = events.clone();
                 let spawned = thread::Builder::new()

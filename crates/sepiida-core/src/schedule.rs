@@ -21,10 +21,11 @@ pub enum Event {
     /// change. The time is taken when the message arrives, since the agent
     /// may be busy (attaching) when it handles the event.
     ExplorerRestarted(Instant),
-    /// A sandboxed shell host (this process id) exited at this time,
-    /// taking its styling along. For the agent's crash guard; not a change
-    /// by itself (later rechecks attach to the new process).
-    ShellHostExited(Host, u32, Instant),
+    /// A sandboxed shell host (this process id) exited with this exit code
+    /// (if it could be read) at this time, taking its styling along. For
+    /// the agent's crash guard; not a change by itself (later rechecks
+    /// attach to the new process).
+    ShellHostExited(Host, u32, Option<u32>, Instant),
     /// A window of a sandboxed shell host (this process id) appeared:
     /// Start, quick settings, the notification centre. The agent attaches
     /// if needed and re-sends the colours (Windows may have given the
@@ -173,7 +174,7 @@ mod tests {
         let t0 = Instant::now();
         // Handled by the agent loop itself; nothing to schedule.
         s.handle(Event::ShellWindowShown(Host::ShellExperience, 42), t0);
-        s.handle(Event::ShellHostExited(Host::StartMenu, 7, t0), t0);
+        s.handle(Event::ShellHostExited(Host::StartMenu, 7, Some(1), t0), t0);
         assert_eq!(s.deadline(), None);
         s.handle(Event::ExplorerRestarted(t0), t0);
         assert_eq!(s.deadline(), Some(t0 + SETTLE));

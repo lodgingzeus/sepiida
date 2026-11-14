@@ -9,12 +9,22 @@
 //! the tree (a flyout closing). Each tinted brush is held strongly until
 //! the restore, which puts its original tint back even when no element
 //! uses it any more.
+//!
+//! New colours go to every remembered brush of the role, not only those on
+//! an element now: on a light/dark switch made while a surface is hidden,
+//! Windows later swaps the other theme's brush back in, and it must already
+//! hold the new colour, or the old one flashes up first. The list is
+//! capped (`MAX_TINTED_BRUSHES`); past it, the brush longest off an element
+//! gets its original tint back and is let go.
 
 use core::ffi::c_void;
 
 use sepiida_core::{
     Color,
-    shell::tint::{Argb, BrushTint, Opacity, Tint},
+    shell::{
+        rules::Role,
+        tint::{Argb, BrushTint, MAX_TINTED_BRUSHES, Opacity, Remembered, Tint, brush_to_drop},
+    },
 };
 use windows::core::{HRESULT, IUnknown, Interface};
 
@@ -39,6 +49,14 @@ struct Tinted {
     identity: *mut c_void,
     brush: Brush,
     state: BrushTint,
+    /// The role of the element that last held it.
+    role: Role,
+    /// Its handle when an element last held it.
+    value: InstanceHandle,
+    /// When an element last held it (`Tints::clock`).
+    last_on_target: u64,
+    /// The colour pass (`Tints::pass`) that last tinted it.
+    pass: u64,
 }
 
 /// The two interfaces of one acrylic brush; the base is optional, since
@@ -51,10 +69,20 @@ struct Brush {
 #[derive(Default)]
 pub struct Tints {
     brushes: Vec<Tinted>,
+    /// Counts tints through an element, to order brushes by last use.
+    clock: u64,
+    /// Counts colour changes, so one change tints each brush once.
+    pass: u64,
 }
 
 impl Tints {
-    /// Tints the brush whose handle is `value` (a target's current
+    /// Starts a new colour pass: brushes tinted from now on count as done
+    /// for `retint_others`.
+    pub fn begin_pass(&mut self) {
+        self.pass += 1;
+    }
+
+    /// Tints the brush whose handle is `value` (a `role` target's current
     /// property value) with `color`, at `opacity` or Windows' own opacity.
     /// Returns false, changing nothing, if it is not an `AcrylicBrush` or
     /// refuses the tint.
@@ -62,13 +90,69 @@ impl Tints {
         &mut self,
         xaml: &Xaml,
         value: InstanceHandle,
+        role: Role,
         color: Color,
         opacity: Option<Opacity>,
     ) -> bool {
-        let Some(slot) = self.slot(xaml, value) else {
+        let Some(slot) = self.slot(xaml, value, role) else {
             return false;
         };
+        self.clock += 1;
         let tinted = &mut self.brushes[slot];
+        tinted.role = role;
+        tinted.value = value;
+        tinted.last_on_target = self.clock;
+        self.tint_slot(slot, color, opacity)
+    }
+
+    /// Tints the remembered brushes of `role` this pass has not tinted
+    /// through an element (brushes of hidden surfaces). Returns how many.
+    pub fn retint_others(&mut self, role: Role, color: Color, opacity: Option<Opacity>) -> usize {
+        let others: Vec<usize> = (0..self.brushes.len())
+            .filter(|&i| self.brushes[i].role == role && self.brushes[i].pass != self.pass)
+            .collect();
+        for &slot in &others {
+            log!(
+                "brush {:#x} is on no element now; tinting it for when it returns",
+                self.brushes[slot].value
+            );
+            self.tint_slot(slot, color, opacity);
+        }
+        others.len()
+    }
+
+    /// Lets go of brushes past `MAX_TINTED_BRUSHES`, longest off an element
+    /// first, putting their original tint back. `in_use` are the values
+    /// elements hold now; those are kept.
+    pub fn trim(&mut self, in_use: &[InstanceHandle]) {
+        loop {
+            let remembered: Vec<Remembered> = self
+                .brushes
+                .iter()
+                .map(|t| Remembered {
+                    last_on_target: t.last_on_target,
+                    in_use: in_use.contains(&t.value),
+                })
+                .collect();
+            let Some(slot) = brush_to_drop(&remembered, MAX_TINTED_BRUSHES) else {
+                return;
+            };
+            let tinted = self.brushes.swap_remove(slot);
+            let ok = write_tint(&tinted.brush, tinted.state.original());
+            log!(
+                "{} brushes remembered; let go of brush {:#x}, original tint back: {ok}",
+                self.brushes.len() + 1,
+                tinted.value
+            );
+        }
+    }
+
+    /// Tints the remembered brush at `slot`; see `apply`.
+    fn tint_slot(&mut self, slot: usize, color: Color, opacity: Option<Opacity>) -> bool {
+        let pass = self.pass;
+        let tinted = &mut self.brushes[slot];
+        tinted.pass = pass;
+        let value = tinted.value;
         let Some(current) = read_tint(&tinted.brush) else {
             return false;
         };
@@ -121,7 +205,7 @@ impl Tints {
 
     /// The brush behind `value` among those already tinted, or newly
     /// recorded if it is an `AcrylicBrush`.
-    fn slot(&mut self, xaml: &Xaml, value: InstanceHandle) -> Option<usize> {
+    fn slot(&mut self, xaml: &Xaml, value: InstanceHandle, role: Role) -> Option<usize> {
         let object = xaml.object(value)?;
         let identity = match object.cast::<IUnknown>() {
             Ok(unknown) => unknown.as_raw(),
@@ -154,6 +238,10 @@ impl Tints {
             identity,
             brush,
             state: BrushTint::new(current),
+            role,
+            value,
+            last_on_target: 0,
+            pass: 0,
         });
         Some(self.brushes.len() - 1)
     }

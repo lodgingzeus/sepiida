@@ -2,6 +2,10 @@
 //! records every call: class factory, `SetSite`, tree callbacks, commands
 //! through the control window, re-attach and detach. Windows only (it uses
 //! real COM objects and a real message-only window); runs in CI.
+//!
+//! The tests here paint the taskbar solid through a test-only rule, so the
+//! solid path stays covered although no shipped rule uses it; the shipped,
+//! tinted taskbar is tested in `tint`.
 
 use std::{
     sync::{Mutex, MutexGuard},
@@ -13,7 +17,7 @@ use sepiida_core::{
     Color,
     shell::hosts::Host,
     shell::protocol::{CONTROL_WINDOW_CLASS, Command, TAP_CLSID},
-    shell::rules::{RECTANGLE_TYPE, Role, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME},
+    shell::rules::{Paint, RECTANGLE_TYPE, Role, Rule, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME},
 };
 use windows::{
     Win32::{
@@ -35,6 +39,12 @@ use fake::*;
 
 const TASKBAR_BACKGROUND_NAME: &str = TASKBAR_BACKGROUND.name;
 const BRUSH: &str = "Windows.UI.Xaml.Media.SolidColorBrush";
+
+/// The taskbar background painted solid, as before M4 moved it to tint.
+static SOLID_TASKBAR: [Rule; 1] = [Rule {
+    paint: Paint::Solid,
+    ..TASKBAR_BACKGROUND
+}];
 
 /// Creates the TAP object the way XAML does: through the exported
 /// `DllGetClassObject` and the class factory.
@@ -137,11 +147,11 @@ const EXPLORER_FILL: u64 = 0x300;
 /// at a time.
 static ATTACH_LOCK: Mutex<()> = Mutex::new(());
 
-/// Takes the attach lock and pretends to be Explorer, so the taskbar rules
-/// apply unless a test pretends otherwise.
+/// Takes the attach lock and pretends to be Explorer with the solid
+/// taskbar rule, unless a test pretends otherwise.
 fn serial() -> MutexGuard<'static, ()> {
     let guard = ATTACH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    crate::host::tests::pretend(Host::Explorer);
+    crate::host::tests::pretend_with(Host::Explorer, &SOLID_TASKBAR);
     guard
 }
 

@@ -32,7 +32,9 @@ impl Role {
 /// How a rule's property gets the role's colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Paint {
-    /// Replace the value with a `SolidColorBrush` of the colour.
+    /// Replace the value with a `SolidColorBrush` of the colour. No rule
+    /// uses it since the taskbar moved to tint; kept as the fallback a
+    /// surface without acrylic can be switched to.
     Solid,
     /// Keep Windows' own `AcrylicBrush` and set its tint to the colour.
     /// Values that are not an `AcrylicBrush` are left alone.
@@ -81,14 +83,15 @@ pub const TASKBAR_FRAME_NAME: &str = "TaskbarFrame";
 
 /// The rectangle that paints the taskbar background (Windows 11 23H2 and
 /// 24H2: `TaskbarFrame > Grid#RootGrid > TaskbarBackground > Grid >
-/// Rectangle#BackgroundFill`).
+/// Rectangle#BackgroundFill`). Its `Fill` is a local `AcrylicBrush` (M3
+/// round 3), tinted like the other surfaces (M4, 2026-11-14).
 pub const TASKBAR_BACKGROUND: Rule = Rule {
     label: "taskbar background",
     type_name: RECTANGLE_TYPE,
     name: "BackgroundFill",
     ancestor: Some(TASKBAR_FRAME_NAME),
     property: "Fill",
-    paint: Paint::Solid,
+    paint: Paint::Tint,
     role: Role::Surface,
 };
 
@@ -201,9 +204,9 @@ mod tests {
     }
 
     #[test]
-    fn the_taskbar_stays_solid_and_sandboxed_surfaces_are_tinted() {
-        assert!(TASKBAR_RULES.iter().all(|r| r.paint == Paint::Solid));
-        for host in [Host::StartMenu, Host::ShellHost, Host::ShellExperience] {
+    fn every_surface_is_tinted_and_none_painted_solid() {
+        assert!(TASKBAR_RULES.iter().all(|r| r.paint == Paint::Tint));
+        for host in Host::ALL {
             assert!(
                 rules_for(host).iter().all(|r| r.paint != Paint::Solid),
                 "{host:?}"

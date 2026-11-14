@@ -5,6 +5,10 @@
 //! after every restart, so a DLL bug that crashes Explorer would otherwise
 //! crash it in a loop. The guard is fed the time of each attach and each
 //! Explorer restart as they happen; it needs no timer of its own.
+//!
+//! The sandboxed hosts also exit normally (Windows ends a suspended host,
+//! or restarts it); where the exit code is known, `is_crash_exit` tells a
+//! crash from such an exit, and a normal one is not counted.
 
 use std::time::{Duration, Instant};
 
@@ -13,6 +17,15 @@ use std::time::{Duration, Instant};
 pub const CRASH_WINDOW: Duration = Duration::from_secs(30);
 /// Crashes in a row after which styling is turned off.
 pub const MAX_CRASHES: u32 = 2;
+
+/// Whether a process that ended with `exit_code` crashed. A process killed
+/// by an unhandled exception or a fail-fast ends with that NTSTATUS
+/// (0xC0000005 access violation, 0xC0000409 fail-fast, 0x80000003
+/// breakpoint): its severity bits are set. An unknown code counts as a
+/// crash, so the guard errs towards stopping.
+pub fn is_crash_exit(exit_code: Option<u32>) -> bool {
+    exit_code.is_none_or(|code| code & 0x8000_0000 != 0)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
@@ -69,6 +82,13 @@ impl CrashGuard {
             self.crashes = 0;
         }
         self.last_attach = Some(now);
+    }
+
+    /// The process ended without crashing (see `is_crash_exit`): the last
+    /// attach is no longer pending, and the run of crashes is broken.
+    pub fn exited_cleanly(&mut self) {
+        self.last_attach = None;
+        self.crashes = 0;
     }
 
     /// Explorer restarted at `now`. Our DLL went with the old process.
@@ -153,5 +173,32 @@ mod tests {
         assert_eq!(guard.explorer_restarted(start), Verdict::Continue);
         guard.attached(start);
         assert_eq!(guard.explorer_restarted(start + SECOND), Verdict::Disable);
+    }
+
+    #[test]
+    fn a_clean_exit_after_an_attach_is_not_a_crash() {
+        let start = Instant::now();
+        let mut guard = CrashGuard::default();
+        guard.attached(start);
+        assert_eq!(guard.explorer_restarted(start + SECOND), Verdict::Continue);
+        guard.attached(start + 2 * SECOND);
+        guard.exited_cleanly();
+        guard.attached(start + 4 * SECOND);
+        assert_eq!(
+            guard.explorer_restarted(start + 5 * SECOND),
+            Verdict::Continue
+        );
+        assert_eq!(guard.crashes(), 1);
+    }
+
+    #[test]
+    fn exception_codes_and_unknown_codes_are_crashes() {
+        for code in [0xC000_0005, 0xC000_0409, 0xC000_0374, 0x8000_0003] {
+            assert!(is_crash_exit(Some(code)), "{code:#x}");
+        }
+        assert!(is_crash_exit(None));
+        for code in [0, 1, 0x103, 0x7FFF_FFFF] {
+            assert!(!is_crash_exit(Some(code)), "{code:#x}");
+        }
     }
 }

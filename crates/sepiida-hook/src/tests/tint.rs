@@ -1,6 +1,7 @@
-//! Tinted paint in a sandboxed host (Start): Windows' acrylic brush keeps
-//! its place and gets our tint; overlays are only logged; the original
-//! tint comes back on restore, even once the element has left the tree.
+//! Tinted paint in a sandboxed host (Start) and on the taskbar: Windows'
+//! acrylic brush keeps its place and gets our tint; overlays are only
+//! logged; the original tint comes back on restore, even once the element
+//! has left the tree.
 
 use sepiida_core::{
     Color,
@@ -13,7 +14,9 @@ use sepiida_core::{
 };
 use windows::core::BSTR;
 
-use super::{add, control_window, fake::*, new_tap, send, serial, wait_for_callback, wait_until};
+use super::{
+    add, add_taskbar, control_window, fake::*, new_tap, send, serial, wait_for_callback, wait_until,
+};
 use crate::xamlom::*;
 
 const START_BACKGROUND: InstanceHandle = 20;
@@ -220,5 +223,58 @@ fn each_host_only_styles_its_own_surfaces() {
     send(Command::SetColor(Role::Surface, Color::new(1, 2, 3)));
     assert!(!shared.has(&format!("GetPropertyValuesChain {RECT_HANDLE:#x}")));
     assert!(nothing_created_or_replaced(&shared));
+    detach(&shared);
+}
+
+#[test]
+fn the_taskbar_acrylic_is_tinted_in_explorer() {
+    let _serial = serial();
+    crate::host::tests::pretend(Host::Explorer);
+    let (shared, site) = new_fake();
+    shared
+        .values
+        .lock()
+        .unwrap()
+        .insert((RECT_HANDLE, FILL_INDEX), ACRYLIC);
+    let tap = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap.SetSite(&site) }.unwrap();
+    let callback = wait_for_callback(&shared);
+    add_taskbar(&callback);
+    send(Command::SetColor(
+        Role::Surface,
+        Color::new(0x33, 0x66, 0x99),
+    ));
+    assert!(shared.has("put_TintColor #CC336699"));
+    assert!(shared.has("put_FallbackColor #FF336699"));
+    send(Command::Restore);
+    assert_eq!(shared.current_tint(), WINDOWS_TINT);
+    assert_eq!(shared.current_fallback(), WINDOWS_FALLBACK);
+    assert!(nothing_created_or_replaced(&shared));
+    detach(&shared);
+}
+
+#[test]
+fn a_brush_on_no_element_gets_new_colours_too() {
+    let _serial = serial();
+    let (shared, callback) = attach_as(Host::StartMenu, ACRYLIC);
+    add(&callback, START_BACKGROUND, 0, BORDER_TYPE, "AcrylicBorder");
+    send(Command::SetColor(Role::Surface, Color::new(1, 2, 3)));
+    assert!(shared.has("put_TintColor #CC010203"));
+
+    // The surface hides; a light/dark switch sends new colours. The brush
+    // Windows will swap back in must hold them already.
+    remove(&callback, START_BACKGROUND);
+    send(Command::SetColor(Role::Surface, Color::new(4, 5, 6)));
+    assert!(shared.has("put_TintColor #CC040506"));
+    // Once per colour: a brush tinted through an element is not tinted
+    // again as a hidden one in the same pass.
+    add(&callback, START_BACKGROUND, 0, BORDER_TYPE, "AcrylicBorder");
+    let before = shared.count("put_TintColor #CC070809");
+    send(Command::SetColor(Role::Surface, Color::new(7, 8, 9)));
+    assert_eq!(shared.count("put_TintColor #CC070809"), before + 1);
+
+    send(Command::Restore);
+    assert_eq!(shared.current_tint(), WINDOWS_TINT);
     detach(&shared);
 }

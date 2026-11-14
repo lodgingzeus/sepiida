@@ -83,7 +83,7 @@ impl EngineWatch {
         if let Some(process_id) = actions.wait_for_exit {
             let events = self.events.clone();
             let running = Arc::clone(&self.running);
-            processes::wait_for_exit(process_id, "wallpaper-engine-exit", move || {
+            processes::wait_for_exit(process_id, "wallpaper-engine-exit", move |_| {
                 running.store(false, Ordering::SeqCst);
                 info!(trigger = "Wallpaper Engine exited", "change noticed");
                 // In Auto mode the Windows wallpaper takes over.

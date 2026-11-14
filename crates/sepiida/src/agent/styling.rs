@@ -92,10 +92,10 @@ impl ShellStyling {
         }
     }
 
-    /// A sandboxed host exited at `at`. Turns styling off after repeated
-    /// exits right after attaching.
-    pub fn host_exited(&mut self, host: Host, pid: u32, at: Instant) {
-        if let Some(crashes) = self.hosts.host_exited(host, pid, at) {
+    /// A sandboxed host exited with `exit_code` at `at`. Turns styling off
+    /// after repeated crashes right after attaching.
+    pub fn host_exited(&mut self, host: Host, pid: u32, exit_code: Option<u32>, at: Instant) {
+        if let Some(crashes) = self.hosts.host_exited(host, pid, exit_code, at) {
             turn_off_after_crashes(&self.config_path, crashes, host.exe());
         }
     }

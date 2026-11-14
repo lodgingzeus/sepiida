@@ -142,8 +142,8 @@ fn run_loop(
             Ok(event) => {
                 match event {
                     Event::ExplorerRestarted(at) => agent.styling.explorer_restarted(at),
-                    Event::ShellHostExited(host, pid, at) => {
-                        agent.styling.host_exited(host, pid, at);
+                    Event::ShellHostExited(host, pid, exit_code, at) => {
+                        agent.styling.host_exited(host, pid, exit_code, at);
                     }
                     Event::ShellWindowShown(host, pid) => agent.styling.window_shown(host, pid),
                     _ => {}

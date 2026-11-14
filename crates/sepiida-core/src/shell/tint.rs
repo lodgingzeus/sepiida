@@ -136,6 +136,39 @@ impl BrushTint {
     }
 }
 
+/// The most brushes one styler keeps tinted. Brushes are shared (all toast
+/// borders share one, M4 step 3 round 1), so a host holds a handful; the
+/// cap only matters if Windows keeps making new ones.
+pub const MAX_TINTED_BRUSHES: usize = 16;
+
+/// A remembered brush, as far as choosing one to let go of goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Remembered {
+    /// When a target last held it (a counter; larger is later).
+    pub last_on_target: u64,
+    /// A target holds it now.
+    pub in_use: bool,
+}
+
+/// The brush to let go of while more than `cap` are remembered: of those
+/// no target holds now, the one longest off a target. `None` if within the
+/// cap, or if every brush is in use (one in use is never dropped).
+///
+/// Brushes no target holds are still worth keeping: Windows swaps the
+/// other theme's brush back in on a light/dark switch, and one that
+/// already has our colour shows no flash of the old one.
+pub fn brush_to_drop(brushes: &[Remembered], cap: usize) -> Option<usize> {
+    if brushes.len() <= cap {
+        return None;
+    }
+    brushes
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| !b.in_use)
+        .min_by_key(|(_, b)| b.last_on_target)
+        .map(|(i, _)| i)
+}
+
 /// `color` with `original`'s alpha, or opaque if that was zero.
 fn recolor(original: Argb, color: Color) -> Argb {
     let alpha = match original.a {
@@ -242,6 +275,36 @@ mod tests {
         };
         assert!(!brush.observe(other));
         assert_eq!(brush.original(), other);
+    }
+
+    fn remembered(last_on_target: u64, in_use: bool) -> Remembered {
+        Remembered {
+            last_on_target,
+            in_use,
+        }
+    }
+
+    #[test]
+    fn within_the_cap_nothing_is_dropped() {
+        let brushes = [remembered(1, false), remembered(2, false)];
+        assert_eq!(brush_to_drop(&brushes, 2), None);
+        assert_eq!(brush_to_drop(&[], 0), None);
+    }
+
+    #[test]
+    fn the_brush_longest_off_a_target_is_dropped() {
+        let brushes = [
+            remembered(5, false),
+            remembered(1, true),
+            remembered(3, false),
+        ];
+        assert_eq!(brush_to_drop(&brushes, 2), Some(2));
+    }
+
+    #[test]
+    fn a_brush_in_use_is_never_dropped() {
+        let brushes = [remembered(1, true), remembered(2, true)];
+        assert_eq!(brush_to_drop(&brushes, 1), None);
     }
 
     #[test]

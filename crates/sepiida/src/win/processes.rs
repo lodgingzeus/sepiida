@@ -11,7 +11,7 @@ use windows::Win32::{
         },
         RemoteDesktop::ProcessIdToSessionId,
         Threading::{
-            GetCurrentProcessId, INFINITE, OpenProcess, PROCESS_NAME_WIN32,
+            GetCurrentProcessId, GetExitCodeProcess, INFINITE, OpenProcess, PROCESS_NAME_WIN32,
             PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
             WaitForSingleObject,
         },
@@ -61,29 +61,62 @@ pub fn find_in_session(names: &[&str]) -> windows::core::Result<Vec<Process>> {
 
 /// Calls `on_exit` from a background thread (named `thread_name`) once
 /// process `pid` has exited, or straight away if it is already gone. The
-/// thread only waits on the process handle; it never polls.
-pub fn wait_for_exit(pid: u32, thread_name: &str, on_exit: impl FnOnce() + Send + 'static) {
-    // SAFETY: no pointers are passed; SYNCHRONIZE is the only right needed
-    // to wait.
-    let Ok(process) = (unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }) else {
-        on_exit();
+/// thread only waits on the process handle; it never polls. `on_exit` gets
+/// the exit code, or `None` if it could not be read (the process was gone
+/// before it could be opened, or reading it was refused).
+pub fn wait_for_exit(
+    pid: u32,
+    thread_name: &str,
+    on_exit: impl FnOnce(Option<u32>) + Send + 'static,
+) {
+    let Some(process) = open_to_wait(pid) else {
+        on_exit(None);
         return;
     };
-    let process = Owned(process);
     let spawned = thread::Builder::new()
         .name(thread_name.to_owned())
         .spawn(move || {
             // Move the whole guard in, so the handle is closed on this
             // thread after the wait.
-            let process = process;
+            let (process, can_query) = process;
             // SAFETY: the handle is valid until `process` drops after the
             // wait returns.
             unsafe { WaitForSingleObject(process.0, INFINITE) };
-            on_exit();
+            on_exit(can_query.then(|| exit_code(&process)).flatten());
         });
     // Without the thread the exit goes unnoticed until the next apply;
     // nothing else depends on it.
     drop(spawned);
+}
+
+/// Opens `pid` to wait for it, with the right to read its exit code if
+/// that is granted (the bool says whether it was).
+fn open_to_wait(pid: u32) -> Option<(Owned, bool)> {
+    // SAFETY: no pointers are passed.
+    let both = unsafe {
+        OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        )
+    };
+    if let Ok(process) = both {
+        return Some((Owned(process), true));
+    }
+    // SAFETY: no pointers are passed; SYNCHRONIZE is the only right needed
+    // to wait.
+    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.ok()?;
+    Some((Owned(process), false))
+}
+
+/// The exit code of a process that has exited.
+fn exit_code(process: &Owned) -> Option<u32> {
+    let mut code = 0u32;
+    // SAFETY: a valid handle with PROCESS_QUERY_LIMITED_INFORMATION and a
+    // writable out value.
+    unsafe { GetExitCodeProcess(process.0, &mut code) }
+        .ok()
+        .map(|()| code)
 }
 
 /// A process handle closed on drop.
