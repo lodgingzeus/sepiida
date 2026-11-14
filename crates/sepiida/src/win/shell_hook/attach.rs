@@ -23,7 +23,7 @@ use windows::{
 
 use super::{
     ShellHookError,
-    control::{detach_all, wait_for_detach},
+    control::{detach_all, wait_for_detach, wait_until_attached},
     library::Library,
     signals::{Outcome, Signals},
 };
@@ -234,6 +234,44 @@ pub fn attach_dump(pid: u32, dll: &Path) -> Result<Vec<(u32, HRESULT)>, ShellHoo
         }
     }
     Ok(answered)
+}
+
+/// How a style-mode attach to a sandboxed host went.
+pub struct SandboxAttached {
+    /// Control windows of earlier copies asked to detach first.
+    pub replaced: usize,
+    /// The connection that answered and its result.
+    pub connection: u32,
+    pub result: HRESULT,
+    /// Whether the DLL's control window appeared in time. A host that is
+    /// suspended (Start while closed) only runs the DLL once it is shown.
+    pub confirmed: bool,
+}
+
+/// Asks XAML in a sandboxed shell host (Start, quick settings, the
+/// notification centre) to load the DLL in style mode, from sepiida.exe,
+/// after detaching any earlier copy. One attachment sees every XAML thread
+/// of the process, so the first answering connection is enough. The host
+/// cannot reach our `Local\` events, so success is judged by the DLL's
+/// control window appearing within `timeout`.
+pub fn attach_sandboxed(
+    pid: u32,
+    dll: &Path,
+    timeout: Duration,
+) -> Result<SandboxAttached, ShellHookError> {
+    check_arch(pid)?;
+    let replaced = detach_all(pid)?;
+    if replaced > 0 {
+        wait_for_detach(pid);
+    }
+    let library = Library::load(dll)?;
+    let (connection, result) = attach_remote(pid, &library, 1, AttachMode::Style)?;
+    Ok(SandboxAttached {
+        replaced,
+        connection,
+        result,
+        confirmed: wait_until_attached(pid, timeout),
+    })
 }
 
 fn attach_remote(

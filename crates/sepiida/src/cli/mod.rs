@@ -4,7 +4,7 @@ use sepiida_core::{
     Color,
     accent::ThemeMode,
     config::{Config, ModeSetting},
-    shell::protocol::MAX_CONNECTION,
+    shell::{hosts::Host, protocol::MAX_CONNECTION, tint::Opacity},
     source::SourceChoice,
 };
 
@@ -14,8 +14,8 @@ usage:
   sepiida palette <image>          print the palette for an image
   sepiida apply [options]          theme Windows from the current wallpaper
   sepiida run                      stay in the background (tray icon) and re-theme when the wallpaper changes
-  sepiida restore [--dry-run]      put back the accent colour you had before sepiida, and the stock taskbar
-  sepiida shell <command>          experimental taskbar styling (see below)
+  sepiida restore [--dry-run]      put back the accent colour you had before sepiida, and the stock shell look
+  sepiida shell <command>          experimental shell styling (see below)
 
 apply options:
   --source auto|windows|wallpaper-engine   where to read the wallpaper (default: from settings)
@@ -32,10 +32,21 @@ taskbar\" is on in the settings):
                      copy first; --from tries
                      VisualDiagConnectionN onwards (default 1); --remote
                      asks from sepiida.exe instead of from inside Explorer
-  color <rrggbb>     paint the taskbar background in this colour (`#` optional;
-                     PowerShell needs quotes around a leading `#`)
-  restore            put the original taskbar background back
-  detach             restore and stop watching (the DLL stays loaded until Explorer restarts)
+  attach start|quick-settings|notifications [--delay N]
+                     load the styling DLL into that surface's process
+                     (StartMenuExperienceHost, ShellHost, ShellExperienceHost);
+                     its acrylic background gets tinted. notifications (also
+                     the calendar and toasts) only exists while open: --delay
+                     waits N seconds first, to open it (Win+N)
+  color <rrggbb>     colour every attached surface: the taskbar is painted,
+                     the others tinted (`#` optional; PowerShell needs quotes
+                     around a leading `#`)
+  opacity <0-100|default>
+                     tint opacity of the tinted surfaces, in percent, or
+                     Windows' own
+  restore            put the original backgrounds back
+  detach             restore and stop watching (the DLL stays loaded until
+                     the process restarts)
   dump [--delay N]   log the element tree of Start and the notification centre
                      (attaches to StartMenuExperienceHost, ShellExperienceHost
                      and ShellHost; open each surface afterwards). --delay waits
@@ -63,16 +74,32 @@ pub enum ShellCommand {
         from: u32,
         remote: bool,
     },
+    /// Attach in style mode to a sandboxed host, after waiting this many
+    /// seconds (time to open a flyout whose XAML only exists while shown).
+    AttachSurface {
+        host: Host,
+        delay_secs: u32,
+    },
+    /// The commands below go to every attached process.
     Color(Color),
+    /// `None` is Windows' own opacity.
+    Opacity(Option<Opacity>),
     Restore,
     Detach,
     Dump(DumpAction),
 }
 
+/// The surfaces `shell attach <name>` takes, and their process.
+pub const SURFACES: [(&str, Host); 3] = [
+    ("start", Host::StartMenu),
+    ("quick-settings", Host::ShellHost),
+    ("notifications", Host::ShellExperience),
+];
+
 /// `sepiida shell dump …`: logs the XAML tree of Start and the
 /// notification centre, to find what to style there.
-/// Longest `shell dump --delay`.
-pub const MAX_DUMP_DELAY_SECS: u32 = 60;
+/// Longest `--delay` of `shell dump` and `shell attach <surface>`.
+pub const MAX_DELAY_SECS: u32 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DumpAction {
@@ -142,8 +169,9 @@ pub enum CliError {
     #[error("{0}")]
     InvalidValue(String),
     #[error(
-        "`shell` takes one of: attach [--from N] [--remote], color <rrggbb>, restore, detach, \
-         dump [--delay N | collect | stop]"
+        "`shell` takes one of: attach [--from N] [--remote], \
+         attach start|quick-settings|notifications [--delay N], color <rrggbb>, \
+         opacity <0-100|default>, restore, detach, dump [--delay N | collect | stop]"
     )]
     ShellArguments,
 }
@@ -203,9 +231,56 @@ fn parse_attach(args: &[&str]) -> Result<ShellCommand, CliError> {
     })
 }
 
+fn surface(name: &str) -> Option<Host> {
+    SURFACES
+        .iter()
+        .find(|(surface, _)| *surface == name)
+        .map(|&(_, host)| host)
+}
+
+/// The seconds of a `--delay` option.
+fn parse_delay(seconds: &str) -> Result<u32, CliError> {
+    seconds
+        .parse::<u32>()
+        .ok()
+        .filter(|s| (1..=MAX_DELAY_SECS).contains(s))
+        .ok_or_else(|| {
+            CliError::InvalidValue(format!(
+                "--delay takes a number of seconds from 1 to {MAX_DELAY_SECS}"
+            ))
+        })
+}
+
+fn parse_opacity(value: &str) -> Result<Option<Opacity>, CliError> {
+    if value == "default" {
+        return Ok(None);
+    }
+    value
+        .parse::<u8>()
+        .ok()
+        .and_then(Opacity::from_percent)
+        .map(Some)
+        .ok_or_else(|| {
+            CliError::InvalidValue(format!(
+                "opacity takes a percentage from 0 to {} or `default`",
+                Opacity::MAX
+            ))
+        })
+}
+
 fn parse_shell(args: &[&str]) -> Result<ShellCommand, CliError> {
     match args {
+        ["attach", name, options @ ..] if surface(name).is_some() => {
+            let host = surface(name).ok_or(CliError::ShellArguments)?;
+            let delay_secs = match options {
+                [] => 0,
+                ["--delay", seconds] => parse_delay(seconds)?,
+                _ => return Err(CliError::ShellArguments),
+            };
+            Ok(ShellCommand::AttachSurface { host, delay_secs })
+        }
         ["attach", options @ ..] => parse_attach(options),
+        ["opacity", value] => parse_opacity(value).map(ShellCommand::Opacity),
         ["color", value] => {
             // PowerShell drops an unquoted argument starting with `#` as a
             // comment, so the `#` is optional.
@@ -222,16 +297,8 @@ fn parse_shell(args: &[&str]) -> Result<ShellCommand, CliError> {
         ["restore"] => Ok(ShellCommand::Restore),
         ["detach"] => Ok(ShellCommand::Detach),
         ["dump"] => Ok(ShellCommand::Dump(DumpAction::Start { delay_secs: 0 })),
-        ["dump", "--delay", seconds] => seconds
-            .parse::<u32>()
-            .ok()
-            .filter(|s| (1..=MAX_DUMP_DELAY_SECS).contains(s))
-            .map(|delay_secs| ShellCommand::Dump(DumpAction::Start { delay_secs }))
-            .ok_or_else(|| {
-                CliError::InvalidValue(format!(
-                    "--delay takes a number of seconds from 1 to {MAX_DUMP_DELAY_SECS}"
-                ))
-            }),
+        ["dump", "--delay", seconds] => parse_delay(seconds)
+            .map(|delay_secs| ShellCommand::Dump(DumpAction::Start { delay_secs })),
         ["dump", "collect"] => Ok(ShellCommand::Dump(DumpAction::Collect)),
         ["dump", "stop"] => Ok(ShellCommand::Dump(DumpAction::Stop)),
         _ => Err(CliError::ShellArguments),

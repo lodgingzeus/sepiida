@@ -106,6 +106,73 @@ fn shell_rejects_bad_arguments() {
 }
 
 #[test]
+fn surfaces_attach_by_name_with_an_optional_delay() {
+    for (name, host) in SURFACES {
+        assert_eq!(
+            parse(&["shell", "attach", name]),
+            Ok(Command::Shell(ShellCommand::AttachSurface {
+                host,
+                delay_secs: 0
+            }))
+        );
+    }
+    assert_eq!(
+        parse(&["shell", "attach", "notifications", "--delay", "5"]),
+        Ok(Command::Shell(ShellCommand::AttachSurface {
+            host: Host::ShellExperience,
+            delay_secs: 5
+        }))
+    );
+    for args in [
+        &["shell", "attach", "start", "--remote"][..],
+        &["shell", "attach", "start", "--delay"],
+        &["shell", "attach", "start", "--delay", "5", "extra"],
+        &["shell", "attach", "taskbar"],
+    ] {
+        assert_eq!(parse(args), Err(CliError::ShellArguments), "{args:?}");
+    }
+    for args in [
+        &["shell", "attach", "start", "--delay", "0"][..],
+        &["shell", "attach", "start", "--delay", "61"],
+    ] {
+        assert!(
+            matches!(parse(args), Err(CliError::InvalidValue(_))),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn opacity_takes_a_percentage_or_default() {
+    assert_eq!(
+        parse(&["shell", "opacity", "0"]),
+        Ok(Command::Shell(ShellCommand::Opacity(
+            Opacity::from_percent(0)
+        )))
+    );
+    assert_eq!(
+        parse(&["shell", "opacity", "100"]),
+        Ok(Command::Shell(ShellCommand::Opacity(
+            Opacity::from_percent(100)
+        )))
+    );
+    assert_eq!(
+        parse(&["shell", "opacity", "default"]),
+        Ok(Command::Shell(ShellCommand::Opacity(None)))
+    );
+    for value in ["101", "-1", "50%", "", "Default"] {
+        assert!(
+            matches!(
+                parse(&["shell", "opacity", value]),
+                Err(CliError::InvalidValue(_))
+            ),
+            "{value:?}"
+        );
+    }
+    assert_eq!(parse(&["shell", "opacity"]), Err(CliError::ShellArguments));
+}
+
+#[test]
 fn no_arguments_opens_settings() {
     assert_eq!(parse::<&str>(&[]), Ok(Command::Settings));
 }

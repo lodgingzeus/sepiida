@@ -22,7 +22,8 @@ mod library;
 mod signals;
 
 pub use attach::{
-    Attached, Method, ModuleCheck, Taskbar, attach, attach_dump, hook_dll_path, taskbar,
+    Attached, Method, ModuleCheck, SandboxAttached, Taskbar, attach, attach_dump, attach_sandboxed,
+    hook_dll_path, taskbar,
 };
 pub use control::{detach_all, is_attached, send, wait_until_attached};
 pub use error::ShellHookError;

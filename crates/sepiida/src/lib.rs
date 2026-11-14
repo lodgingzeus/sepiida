@@ -122,9 +122,22 @@ fn shell(_command: ShellCommand) -> Result<()> {
 
 #[cfg(windows)]
 fn shell(command: ShellCommand) -> Result<()> {
+    use sepiida_core::shell::{protocol::Command, rules::Role};
+
     match command {
+        ShellCommand::Attach { from, remote } => shell::taskbar::attach(from, remote),
+        ShellCommand::AttachSurface { host, delay_secs } => {
+            shell::surfaces::attach(host, delay_secs)
+        }
+        ShellCommand::Color(color) => {
+            shell::surfaces::broadcast(Command::SetColor(Role::Surface, color))
+        }
+        ShellCommand::Opacity(opacity) => {
+            shell::surfaces::broadcast(Command::SetTintOpacity(Role::Surface, opacity))
+        }
+        ShellCommand::Restore => shell::surfaces::broadcast(Command::Restore),
+        ShellCommand::Detach => shell::surfaces::broadcast(Command::Detach),
         ShellCommand::Dump(action) => shell::dump::run(action),
-        other => shell::taskbar::run_cli(other),
     }
 }
 

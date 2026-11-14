@@ -34,11 +34,7 @@ pub fn run(action: DumpAction) -> Result<()> {
 
 fn start(delay_secs: u32) -> Result<()> {
     let dll = shell_hook::hook_dll_path()?;
-    // The folder too: opening the file goes through it.
-    if let Some(folder) = dll.parent() {
-        file_access::grant_app_packages_read(folder)?;
-    }
-    file_access::grant_app_packages_read(&dll)?;
+    file_access::grant_app_packages_read_dll(&dll)?;
     println!(
         "{} and its folder are now readable by sandboxed apps",
         dll.display()

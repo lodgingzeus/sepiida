@@ -5,8 +5,8 @@
 //! privileged" AppContainers `ALL RESTRICTED APPLICATION PACKAGES`
 //! (S-1-15-2-2). A file the user downloaded has neither, so XAML in the
 //! Start menu could not load the DLL. Read and execute is all that is
-//! granted, on the DLL file only; the user owns it, so no elevation is
-//! needed.
+//! granted, on the DLL file and its folder only; the user owns both, so no
+//! elevation is needed.
 
 use windows::{
     Win32::{
@@ -40,9 +40,18 @@ pub enum FileAccessError {
     Sid(&'static str, #[source] windows::core::Error),
 }
 
+/// Makes the hook DLL loadable by sandboxed processes: grants the file
+/// and its folder, since opening the file goes through the folder.
+pub fn grant_app_packages_read_dll(dll: &std::path::Path) -> Result<(), FileAccessError> {
+    if let Some(folder) = dll.parent() {
+        grant_app_packages_read(folder)?;
+    }
+    grant_app_packages_read(dll)
+}
+
 /// Adds read-and-execute for app packages to `path`'s DACL, keeping every
 /// existing entry. Granting again is harmless: the entries merge.
-pub fn grant_app_packages_read(path: &std::path::Path) -> Result<(), FileAccessError> {
+fn grant_app_packages_read(path: &std::path::Path) -> Result<(), FileAccessError> {
     let display = path.display().to_string();
     let name = HSTRING::from(path.as_os_str());
     let sids = APP_PACKAGE_SIDS

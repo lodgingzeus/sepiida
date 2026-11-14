@@ -1,39 +1,27 @@
-//! `sepiida shell attach | color | restore | detach`: the taskbar styling
-//! from the command line (M3 spike).
+//! `sepiida shell attach [--from N] [--remote]`: the taskbar styling DLL
+//! attached from the command line (M3 spike). Colours and the other
+//! commands go through `shell::surfaces`, which reaches every host.
 
 use anyhow::Result;
-use sepiida_core::shell::{protocol::Command, rules::Role};
 
-use crate::{
-    cli::ShellCommand,
-    win::shell_hook::{self, Attached, Method, ModuleCheck, Outcome},
-};
+use crate::win::shell_hook::{self, Attached, Method, ModuleCheck, Outcome};
 
 const LOG_HINT: &str = "%LOCALAPPDATA%\\sepiida\\logs\\hook.log";
 
-pub fn run_cli(command: ShellCommand) -> Result<()> {
+pub fn attach(from: u32, remote: bool) -> Result<()> {
     let taskbar = shell_hook::taskbar()?;
-    match command {
-        ShellCommand::Attach { from, remote } => {
-            let dll = shell_hook::hook_dll_path()?;
-            let method = if remote {
-                Method::Remote
-            } else {
-                Method::InProcess
-            };
-            println!(
-                "attaching {} to Explorer (pid {}), {method:?}, connections from {from}",
-                dll.display(),
-                taskbar.pid
-            );
-            report(&shell_hook::attach(&taskbar, &dll, from, method)?);
-        }
-        ShellCommand::Color(color) => send(taskbar.pid, Command::SetColor(Role::Surface, color))?,
-        ShellCommand::Restore => send(taskbar.pid, Command::Restore)?,
-        ShellCommand::Detach => send(taskbar.pid, Command::Detach)?,
-        // Handled by `shell::dump`.
-        ShellCommand::Dump(_) => {}
-    }
+    let dll = shell_hook::hook_dll_path()?;
+    let method = if remote {
+        Method::Remote
+    } else {
+        Method::InProcess
+    };
+    println!(
+        "attaching {} to Explorer (pid {}), {method:?}, connections from {from}",
+        dll.display(),
+        taskbar.pid
+    );
+    report(&shell_hook::attach(&taskbar, &dll, from, method)?);
     Ok(())
 }
 
@@ -77,10 +65,4 @@ fn print_loaded(when: &str, check: &ModuleCheck) {
         Ok(None) => println!("DLL loaded in Explorer {when}: no"),
         Err(error) => println!("DLL loaded in Explorer {when}: could not check ({error})"),
     }
-}
-
-fn send(pid: u32, command: Command) -> Result<()> {
-    let windows = shell_hook::send(pid, command)?;
-    println!("sent to {windows} XAML thread(s) in Explorer; see {LOG_HINT} for the result");
-    Ok(())
 }
