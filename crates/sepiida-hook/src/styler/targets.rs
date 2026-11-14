@@ -1,33 +1,24 @@
-//! Paints the elements the rules select with their role's colour through
-//! XAML Diagnostics, and puts the original values back.
-//!
-//! One `SolidColorBrush` per role is shared by every target of that role;
-//! changing a role's colour changes its brush's `Color`. A brush is created
-//! only once a target of its role exists, so XAML threads without targets
-//! stay untouched. Its colour is set through the diagnostics API
-//! (`Windows.UI.Color` created from a string) or, if XAML refuses that,
-//! through `ISolidColorBrush::put_Color`; whichever works first is kept.
+//! The elements the rules select, and painting them with their role's
+//! colour.
 //!
 //! The original value is captured when a target is painted, not when it is
 //! found: Explorer may replace the value later (a theme or mode change),
 //! and restoring must bring back what it set last, not a stale brush.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use sepiida_core::{
     Color,
-    shell::{finder::Match, protocol::xaml_color, rules::Role, rules::Rule, tree::Handle},
+    shell::{finder::Match, rules::Role, rules::Rule, tree::Handle},
 };
-use windows::core::{IUnknown, Interface};
+use windows::core::IUnknown;
 
+use super::solid::SolidBrushes;
 use crate::{
     log::log,
-    properties::{Xaml, log_failure},
-    xamlom::{ISolidColorBrush, IVisualTreeService3, IXamlDiagnostics, InstanceHandle},
+    properties::Xaml,
+    xamlom::{IVisualTreeService3, IXamlDiagnostics, InstanceHandle},
 };
-
-const BRUSH_TYPE: &str = "Windows.UI.Xaml.Media.SolidColorBrush";
-const COLOR_TYPE: &str = "Windows.UI.Color";
 
 struct Target {
     label: &'static str,
@@ -47,28 +38,11 @@ struct Original {
     object: Option<IUnknown>,
 }
 
-struct Brush {
-    handle: InstanceHandle,
-    /// Keeps the brush alive while no element uses it (after a restore, or
-    /// once Explorer put its own brush back), so `handle` stays valid.
-    _object: Option<IUnknown>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ColorPath {
-    Diagnostics,
-    Interface,
-}
-
 pub struct Styler {
     xaml: Xaml,
     /// The colour asked for each role; kept until a restore.
     colors: HashMap<Role, Color>,
-    brushes: HashMap<Role, Brush>,
-    /// Every brush handle we created, including replaced ones, so that one
-    /// of ours is never taken for Explorer's original.
-    ours: HashSet<InstanceHandle>,
-    color_path: Option<ColorPath>,
+    solid: SolidBrushes,
     targets: HashMap<Match, Target>,
 }
 
@@ -77,9 +51,7 @@ impl Styler {
         Self {
             xaml: Xaml::new(diagnostics, service),
             colors: HashMap::new(),
-            brushes: HashMap::new(),
-            ours: HashSet::new(),
-            color_path: None,
+            solid: SolidBrushes::default(),
             targets: HashMap::new(),
         }
     }
@@ -106,7 +78,7 @@ impl Styler {
                 styled: false,
             },
         );
-        if self.colors.contains_key(&rule.role) && self.ensure_brush(rule.role) {
+        if self.ensure_brush(rule.role) {
             self.paint(found);
         }
     }
@@ -151,6 +123,15 @@ impl Styler {
         for found in styled {
             self.restore(found);
         }
+    }
+
+    /// Gives the role's brush the role's colour, creating it if needed.
+    /// False if the role has no colour yet or the brush refused it.
+    fn ensure_brush(&mut self, role: Role) -> bool {
+        let Some(&color) = self.colors.get(&role) else {
+            return false;
+        };
+        self.solid.ensure(&self.xaml, role, color)
     }
 
     fn targets_of(&self, role: Role) -> Vec<Match> {
@@ -199,12 +180,12 @@ impl Styler {
         let Some(target) = self.targets.get(&found) else {
             return;
         };
-        let Some(brush) = self.brushes.get(&target.role).map(|b| b.handle) else {
+        let Some(brush) = self.solid.handle(target.role) else {
             return;
         };
         let index = target.property_index;
         let current = self.xaml.property(handle, index);
-        if !current.is_some_and(|value| self.ours.contains(&value)) {
+        if !current.is_some_and(|value| self.solid.is_ours(value)) {
             // Ours was never set, or Explorer has since put its own value
             // there: that value is the one to restore.
             let original = current.map(|value| Original {
@@ -242,97 +223,5 @@ impl Styler {
                 "NOT kept"
             }
         );
-    }
-
-    /// Creates the role's brush if needed and gives it the role's colour.
-    /// Returns whether the brush now has that colour. If an existing brush
-    /// refuses the colour (its handle may have gone stale), it is replaced
-    /// by a new one, once.
-    fn ensure_brush(&mut self, role: Role) -> bool {
-        let Some(&color) = self.colors.get(&role) else {
-            return false;
-        };
-        if let Some(brush) = self.brushes.get(&role).map(|b| b.handle) {
-            if self.color_brush(role, brush, color) {
-                return true;
-            }
-            log!("{role:?} brush {brush:#x} refused the colour; creating a new one");
-            self.brushes.remove(&role);
-        }
-        let Some(handle) = self.xaml.create(BRUSH_TYPE, None) else {
-            return false;
-        };
-        let object = self.xaml.object(handle);
-        self.ours.insert(handle);
-        self.brushes.insert(
-            role,
-            Brush {
-                handle,
-                _object: object,
-            },
-        );
-        self.color_brush(role, handle, color)
-    }
-
-    fn color_brush(&mut self, role: Role, brush: InstanceHandle, color: Color) -> bool {
-        let ok = match self.color_path {
-            Some(ColorPath::Diagnostics) => self.color_by_diagnostics(brush, color),
-            Some(ColorPath::Interface) => self.color_by_interface(brush, color),
-            None => {
-                if self.color_by_diagnostics(brush, color) {
-                    self.color_path = Some(ColorPath::Diagnostics);
-                    true
-                } else if self.color_by_interface(brush, color) {
-                    self.color_path = Some(ColorPath::Interface);
-                    true
-                } else {
-                    false
-                }
-            }
-        };
-        log!(
-            "{role:?} brush colour {color} via {:?}: {ok}",
-            self.color_path
-        );
-        if ok {
-            // Read back what XAML now reports for the colour.
-            self.xaml.chain_index(brush, "Color");
-        }
-        ok
-    }
-
-    fn color_by_diagnostics(&self, brush: InstanceHandle, color: Color) -> bool {
-        let Some(index) = self.xaml.property_index(brush, "Color") else {
-            return false;
-        };
-        let Some(value) = self.xaml.create(COLOR_TYPE, Some(&xaml_color(color))) else {
-            return false;
-        };
-        log_failure(
-            "SetProperty(Color)",
-            self.xaml.set_property(brush, index, value),
-        )
-    }
-
-    fn color_by_interface(&self, brush: InstanceHandle, color: Color) -> bool {
-        let Some(object) = self.xaml.object(brush) else {
-            return false;
-        };
-        let brush: ISolidColorBrush = match object.cast() {
-            Ok(brush) => brush,
-            Err(error) => {
-                log!("brush is not an ISolidColorBrush: {error}");
-                return false;
-            }
-        };
-        let value = windows::UI::Color {
-            A: 0xff,
-            R: color.r,
-            G: color.g,
-            B: color.b,
-        };
-        // SAFETY: plain call on a live interface.
-        let hr = unsafe { brush.put_Color(value) };
-        log_failure("ISolidColorBrush::put_Color", hr)
     }
 }
