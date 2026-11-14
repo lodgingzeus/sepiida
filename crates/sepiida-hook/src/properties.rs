@@ -137,6 +137,26 @@ impl Xaml {
     /// XAML itself names the types and formats the values we pass to
     /// `CreateInstance`.
     pub fn chain_index(&self, handle: InstanceHandle, property: &str) -> Option<u32> {
+        let chain = self.chain(handle);
+        let index = chain.log(handle, property);
+        if index.is_none() {
+            log!("{property} not in the property chain of {handle:#x}");
+        }
+        index
+    }
+
+    /// Logs the chain entries of each of `properties` on `handle`, from one
+    /// chain read.
+    pub fn log_chain(&self, handle: InstanceHandle, properties: &[&str]) {
+        let chain = self.chain(handle);
+        for property in properties {
+            if chain.log(handle, property).is_none() {
+                log!("{property} not in the property chain of {handle:#x}");
+            }
+        }
+    }
+
+    fn chain(&self, handle: InstanceHandle) -> Chain {
         let (mut source_count, mut value_count) = (0u32, 0u32);
         let mut sources: *mut PropertyChainSource = core::ptr::null_mut();
         let mut values: *mut PropertyChainValue = core::ptr::null_mut();
@@ -155,18 +175,32 @@ impl Xaml {
         }
         // SAFETY: on success XAML returns arrays of the given lengths,
         // allocated with CoTaskMemAlloc, whose strings we now own.
-        let (sources, values) = unsafe {
-            (
-                take_array(sources, source_count),
-                take_array(values, value_count),
-            )
-        };
-        let entries: Vec<&PropertyChainValue> = values
+        unsafe {
+            Chain {
+                sources: take_array(sources, source_count),
+                values: take_array(values, value_count),
+            }
+        }
+    }
+}
+
+/// One element's property chain, as XAML reported it.
+struct Chain {
+    sources: Vec<PropertyChainSource>,
+    values: Vec<PropertyChainValue>,
+}
+
+impl Chain {
+    /// Logs the entries of `property` and returns its index.
+    fn log(&self, handle: InstanceHandle, property: &str) -> Option<u32> {
+        let entries: Vec<&PropertyChainValue> = self
+            .values
             .iter()
             .filter(|v| v.PropertyName == property)
             .collect();
         for value in &entries {
-            let source = sources
+            let source = self
+                .sources
                 .get(value.PropertyChainIndex as usize)
                 .map(|s| (s.Source.0, s.Name.to_string(), s.TargetType.to_string()));
             log!(
@@ -180,11 +214,7 @@ impl Xaml {
             );
         }
         // Every entry of one property carries the same index.
-        let index = entries.first().map(|value| value.Index);
-        if index.is_none() {
-            log!("{property} not in the property chain of {handle:#x}");
-        }
-        index
+        entries.first().map(|value| value.Index)
     }
 }
 

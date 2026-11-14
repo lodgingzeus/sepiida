@@ -257,6 +257,34 @@ pub unsafe trait ISolidColorBrush: IUnknown {
     pub fn put_Color(&self, value: windows::UI::Color) -> HRESULT;
 }
 
+/// `Windows.Foundation.TimeSpan`: a duration in 100 ns units.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TimeSpan {
+    pub Duration: i64,
+}
+
+/// `Windows.UI.Xaml.Media.IAcrylicBrush`, from the SDK's
+/// `winrt/windows.ui.xaml.media.h` (members in its order). As above, the
+/// first three slots are `IInspectable`'s. `AcrylicBackgroundSource` is an
+/// `i32` enum (0 HostBackdrop, 1 Backdrop); `boolean` is one byte.
+#[interface("79bbcf4e-cd66-4f1b-a8b6-cd6d2977c18d")]
+pub unsafe trait IAcrylicBrush: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn get_BackgroundSource(&self, value: *mut i32) -> HRESULT;
+    pub fn put_BackgroundSource(&self, value: i32) -> HRESULT;
+    pub fn get_TintColor(&self, value: *mut windows::UI::Color) -> HRESULT;
+    pub fn put_TintColor(&self, value: windows::UI::Color) -> HRESULT;
+    pub fn get_TintOpacity(&self, value: *mut f64) -> HRESULT;
+    pub fn put_TintOpacity(&self, value: f64) -> HRESULT;
+    pub fn get_TintTransitionDuration(&self, value: *mut TimeSpan) -> HRESULT;
+    pub fn put_TintTransitionDuration(&self, value: TimeSpan) -> HRESULT;
+    pub fn get_AlwaysUseFallback(&self, value: *mut u8) -> HRESULT;
+    pub fn put_AlwaysUseFallback(&self, value: u8) -> HRESULT;
+}
+
 /// `[in] BSTR` argument: the string's pointer, or null for an empty one.
 pub fn bstr_arg(value: &BSTR) -> *const u16 {
     if value.is_empty() {

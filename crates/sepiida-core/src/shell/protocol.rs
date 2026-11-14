@@ -7,7 +7,7 @@
 //! parses a buffer from another process; every `(message, wParam)` pair
 //! either decodes to a command or is ignored.
 
-use super::rules::Role;
+use super::{rules::Role, tint::Opacity};
 use crate::Color;
 
 /// Class ID of the DLL's `IObjectWithSite` object, passed to
@@ -21,7 +21,7 @@ pub const CONTROL_WINDOW_CLASS: &str = "sepiida.hook.control";
 /// Version of the commands below. Bumped whenever their meaning changes;
 /// sepiida.exe sends commands only to control windows of its own version,
 /// except `Detach`, which every version understands.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Title of a control window speaking `PROTOCOL_VERSION`.
 pub fn control_window_title() -> String {
@@ -74,11 +74,17 @@ const WM_APP: u32 = 0x8000;
 const MSG_RESTORE: u32 = WM_APP + 0x5e2;
 const MSG_DETACH: u32 = WM_APP + 0x5e3;
 const MSG_SET_COLOR: u32 = WM_APP + 0x5e4;
+const MSG_SET_TINT_OPACITY: u32 = WM_APP + 0x5e5;
+/// `SetTintOpacity`'s value byte for "Windows' own opacity".
+const OPACITY_ORIGINAL: usize = 0xff;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     /// Paint every target of this role in this colour.
     SetColor(Role, Color),
+    /// Tint the acrylic of every tinted target of this role at this
+    /// opacity; `None` goes back to Windows' own opacity.
+    SetTintOpacity(Role, Option<Opacity>),
     /// Put back the original brushes and keep watching.
     Restore,
     /// Put back the original brushes and stop watching. The DLL stays
@@ -97,6 +103,11 @@ impl Command {
                     | (usize::from(c.g) << 8)
                     | usize::from(c.b),
             ),
+            Self::SetTintOpacity(role, opacity) => (
+                MSG_SET_TINT_OPACITY,
+                (usize::from(role.id()) << 8)
+                    | opacity.map_or(OPACITY_ORIGINAL, |o| usize::from(o.percent())),
+            ),
             Self::Restore => (MSG_RESTORE, 0),
             Self::Detach => (MSG_DETACH, 0),
         }
@@ -110,6 +121,15 @@ impl Command {
                 let byte = |shift: u32| ((w >> shift) & 0xff) as u8;
                 let role = Role::from_id(byte(24))?;
                 Some(Self::SetColor(role, Color::new(byte(16), byte(8), byte(0))))
+            }
+            (MSG_SET_TINT_OPACITY, w) if w <= 0xffff => {
+                let role = Role::from_id((w >> 8) as u8)?;
+                let opacity = match w & 0xff {
+                    OPACITY_ORIGINAL => None,
+                    // Anything above 100 % is refused, not clamped.
+                    percent => Some(Opacity::from_percent(percent as u8)?),
+                };
+                Some(Self::SetTintOpacity(role, opacity))
             }
             (MSG_RESTORE, 0) => Some(Self::Restore),
             (MSG_DETACH, 0) => Some(Self::Detach),
@@ -133,6 +153,9 @@ mod tests {
             Command::SetColor(Role::Surface, Color::new(0x12, 0x34, 0x56)),
             Command::SetColor(Role::Accent, Color::new(0, 0, 0)),
             Command::SetColor(Role::Surface, Color::new(255, 255, 255)),
+            Command::SetTintOpacity(Role::Surface, Opacity::from_percent(0)),
+            Command::SetTintOpacity(Role::Accent, Opacity::from_percent(100)),
+            Command::SetTintOpacity(Role::Surface, None),
             Command::Restore,
             Command::Detach,
         ] {
@@ -165,6 +188,21 @@ mod tests {
     }
 
     #[test]
+    fn tint_opacity_is_packed_as_role_then_percent_and_validated() {
+        let (message, wparam) =
+            Command::SetTintOpacity(Role::Surface, Opacity::from_percent(40)).encode();
+        assert_eq!(wparam, 0x0128);
+        assert_eq!(
+            Command::SetTintOpacity(Role::Surface, None).encode().1,
+            0x01ff
+        );
+        assert_eq!(Command::decode(message, 0x0165), None); // 101 %
+        assert_eq!(Command::decode(message, 0x01fe), None);
+        assert_eq!(Command::decode(message, 0x0028), None); // role 0
+        assert_eq!(Command::decode(message, 0x1_0128), None);
+    }
+
+    #[test]
     fn restore_and_detach_keep_their_version_1_numbers() {
         assert_eq!(Command::Restore.encode(), (WM_APP + 0x5e2, 0));
         assert_eq!(Command::Detach.encode(), (WM_APP + 0x5e3, 0));
@@ -172,7 +210,7 @@ mod tests {
 
     #[test]
     fn the_control_window_title_carries_the_version() {
-        assert_eq!(control_window_title(), "sepiida.hook.control v2");
+        assert_eq!(control_window_title(), "sepiida.hook.control v3");
     }
 
     #[test]

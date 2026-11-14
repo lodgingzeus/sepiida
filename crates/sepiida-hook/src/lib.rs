@@ -17,6 +17,8 @@ mod control;
 #[cfg(windows)]
 mod dump;
 #[cfg(windows)]
+mod host;
+#[cfg(windows)]
 mod inject;
 #[cfg(windows)]
 mod log;

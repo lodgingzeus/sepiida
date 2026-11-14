@@ -11,6 +11,7 @@ use std::{
 
 use sepiida_core::{
     Color,
+    shell::hosts::Host,
     shell::protocol::{CONTROL_WINDOW_CLASS, Command, TAP_CLSID},
     shell::rules::{RECTANGLE_TYPE, Role, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME},
 };
@@ -28,6 +29,7 @@ use windows::{
 use crate::{DllGetClassObject, tap::Factory, xamlom::*};
 
 mod fake;
+mod tint;
 
 use fake::*;
 
@@ -135,8 +137,12 @@ const EXPLORER_FILL: u64 = 0x300;
 /// at a time.
 static ATTACH_LOCK: Mutex<()> = Mutex::new(());
 
+/// Takes the attach lock and pretends to be Explorer, so the taskbar rules
+/// apply unless a test pretends otherwise.
 fn serial() -> MutexGuard<'static, ()> {
-    ATTACH_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    let guard = ATTACH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    crate::host::tests::pretend(Host::Explorer);
+    guard
 }
 
 #[test]

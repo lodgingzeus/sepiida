@@ -1,20 +1,18 @@
-//! Work on the XAML UI thread: the visual tree callback, the taskbar
-//! finder and the styler. XAML calls the callback on the thread that owns the
+//! Work on the XAML UI thread: the visual tree callback, the finder (with
+//! this host's rules) and the styler. XAML calls the callback on the thread that owns the
 //! elements, and commands arrive on the same thread through the control
 //! window, so all of this state is thread-local and needs no locking.
 
 use std::cell::RefCell;
 
-use sepiida_core::shell::{
-    finder::Finder, hosts::AttachMode, protocol::Command, rules::TASKBAR_RULES,
-};
+use sepiida_core::shell::{finder::Finder, hosts::AttachMode, protocol::Command};
 use windows::{
     Win32::Foundation::{E_UNEXPECTED, S_OK},
     core::{HRESULT, PCWSTR, implement},
 };
 
 use crate::{
-    control, dump, guard,
+    control, dump, guard, host,
     log::log,
     session,
     styler::Styler,
@@ -125,9 +123,15 @@ fn on_change(
                 old.styler.restore_all();
             }
             control::ensure_window();
+            let rules = host::rules();
+            log!(
+                "{:?}: {} rule(s) on this thread",
+                host::current(),
+                rules.len()
+            );
             *slot = Some(UiState {
                 generation: watcher.generation,
-                finder: Finder::new(TASKBAR_RULES),
+                finder: Finder::new(rules),
                 styler: Styler::new(watcher.diagnostics.clone(), watcher.service.clone()),
             });
         }
@@ -188,6 +192,12 @@ pub fn run_command(command: Command) {
             Command::SetColor(role, color) => {
                 if let Some(state) = slot.as_mut() {
                     state.styler.set_color(role, color);
+                }
+                None
+            }
+            Command::SetTintOpacity(role, opacity) => {
+                if let Some(state) = slot.as_mut() {
+                    state.styler.set_opacity(role, opacity);
                 }
                 None
             }

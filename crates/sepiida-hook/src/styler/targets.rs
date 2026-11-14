@@ -1,5 +1,6 @@
 //! The elements the rules select, and painting them with their role's
-//! colour.
+//! colour: a shared solid brush per role (`solid`) or a tint on Windows'
+//! own acrylic brush (`tint`).
 //!
 //! The original value is captured when a target is painted, not when it is
 //! found: Explorer may replace the value later (a theme or mode change),
@@ -9,11 +10,16 @@ use std::collections::HashMap;
 
 use sepiida_core::{
     Color,
-    shell::{finder::Match, rules::Role, rules::Rule, tree::Handle},
+    shell::{
+        finder::Match,
+        rules::{Paint, Role, Rule},
+        tint::Opacity,
+        tree::Handle,
+    },
 };
 use windows::core::IUnknown;
 
-use super::solid::SolidBrushes;
+use super::{solid::SolidBrushes, tint::Tints};
 use crate::{
     log::log,
     properties::Xaml,
@@ -23,8 +29,9 @@ use crate::{
 struct Target {
     label: &'static str,
     property_index: u32,
+    paint: Paint,
     role: Role,
-    /// The value before our brush replaced it: `None` until first painted,
+    /// Solid paint only: the value before our brush replaced it: `None` until first painted,
     /// `Some(None)` if the property had no value.
     original: Option<Option<Original>>,
     styled: bool,
@@ -42,7 +49,11 @@ pub struct Styler {
     xaml: Xaml,
     /// The colour asked for each role; kept until a restore.
     colors: HashMap<Role, Color>,
+    /// The tint opacity asked for each role, if not Windows' own; kept
+    /// until a restore.
+    opacities: HashMap<Role, Opacity>,
     solid: SolidBrushes,
+    tints: Tints,
     targets: HashMap<Match, Target>,
 }
 
@@ -51,7 +62,9 @@ impl Styler {
         Self {
             xaml: Xaml::new(diagnostics, service),
             colors: HashMap::new(),
+            opacities: HashMap::new(),
             solid: SolidBrushes::default(),
+            tints: Tints::default(),
             targets: HashMap::new(),
         }
     }
@@ -68,18 +81,25 @@ impl Styler {
             return;
         };
         log!("{} index {property_index}", rule.property);
+        if rule.paint == Paint::LogOnly {
+            // The chain read for the index has logged the value.
+            return;
+        }
         self.targets.insert(
             found,
             Target {
                 label: rule.label,
                 property_index,
+                paint: rule.paint,
                 role: rule.role,
                 original: None,
                 styled: false,
             },
         );
-        if self.ensure_brush(rule.role) {
-            self.paint(found);
+        match rule.paint {
+            Paint::Solid if self.ensure_brush(rule.role) => self.paint(found),
+            Paint::Tint => self.tint(found),
+            Paint::Solid | Paint::LogOnly => {}
         }
     }
 
@@ -94,26 +114,48 @@ impl Styler {
         });
     }
 
-    /// Paints every target of `role` in `color`. If the brush cannot take
-    /// the colour, nothing is painted and the previous colour (if any)
-    /// stays: an uncoloured brush would make the surface transparent.
+    /// Paints every target of `role` in `color`. If the solid brush cannot
+    /// take the colour, no solid target is painted and the previous colour
+    /// (if any) stays: an uncoloured brush would make the surface
+    /// transparent.
     pub fn set_color(&mut self, role: Role, color: Color) {
         self.colors.insert(role, color);
-        let targets = self.targets_of(role);
-        if targets.is_empty() {
+        let solid = self.targets_of(role, Paint::Solid);
+        let tinted = self.targets_of(role, Paint::Tint);
+        if solid.is_empty() && tinted.is_empty() {
             log!("no target for {role:?} on this thread; colour kept for later");
             return;
         }
-        if !self.ensure_brush(role) {
+        if !solid.is_empty() && self.ensure_brush(role) {
+            for found in solid {
+                self.paint(found);
+            }
+        }
+        for found in tinted {
+            self.tint(found);
+        }
+    }
+
+    /// Sets the tint opacity of `role`'s tinted targets; `None` goes back
+    /// to Windows' own. Applied now if the role has a colour, else with it.
+    pub fn set_opacity(&mut self, role: Role, opacity: Option<Opacity>) {
+        match opacity {
+            Some(opacity) => self.opacities.insert(role, opacity),
+            None => self.opacities.remove(&role),
+        };
+        if !self.colors.contains_key(&role) {
+            log!("{role:?} has no colour yet; opacity kept for later");
             return;
         }
-        for found in targets {
-            self.paint(found);
+        for found in self.targets_of(role, Paint::Tint) {
+            self.tint(found);
         }
     }
 
     pub fn restore_all(&mut self) {
         self.colors.clear();
+        self.opacities.clear();
+        self.tints.restore_all();
         let styled: Vec<Match> = self
             .targets
             .iter()
@@ -134,10 +176,10 @@ impl Styler {
         self.solid.ensure(&self.xaml, role, color)
     }
 
-    fn targets_of(&self, role: Role) -> Vec<Match> {
+    fn targets_of(&self, role: Role, paint: Paint) -> Vec<Match> {
         self.targets
             .iter()
-            .filter(|(_, target)| target.role == role)
+            .filter(|(_, target)| target.role == role && target.paint == paint)
             .map(|(&found, _)| found)
             .collect()
     }
@@ -173,6 +215,25 @@ impl Styler {
             log!("trying the recorded handle");
             original.handle
         })
+    }
+
+    /// Tints the acrylic brush a target holds now with its role's colour.
+    /// Does nothing if the role has no colour or the value is not an
+    /// acrylic brush.
+    fn tint(&mut self, found: Match) {
+        let Some(target) = self.targets.get(&found) else {
+            return;
+        };
+        let (role, index) = (target.role, target.property_index);
+        let Some(&color) = self.colors.get(&role) else {
+            return;
+        };
+        let Some(value) = self.xaml.property(found.handle, index) else {
+            log!("{} {:#x} has no brush to tint", target.label, found.handle);
+            return;
+        };
+        let opacity = self.opacities.get(&role).copied();
+        self.tints.apply(&self.xaml, value, color, opacity);
     }
 
     fn paint(&mut self, found: Match) {
