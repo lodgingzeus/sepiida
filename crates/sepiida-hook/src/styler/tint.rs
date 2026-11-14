@@ -1,6 +1,8 @@
 //! `Paint::Tint`: Windows' own `AcrylicBrush` stays on the element and gets
-//! our tint through `IAcrylicBrush` (exact values in, exact values out, no
-//! strings to parse).
+//! our tint through `IAcrylicBrush`, and our fallback colour through
+//! `IXamlCompositionBrushBase` (exact values in, exact values out, no
+//! strings to parse). The fallback is what shows when acrylic cannot be
+//! drawn, so without it a VM or battery saver shows no change at all.
 //!
 //! State is kept per brush, not per element: the brush belongs to Windows,
 //! may be shared by several elements and outlives an element that leaves
@@ -19,7 +21,7 @@ use windows::core::{HRESULT, IUnknown, Interface};
 use crate::{
     log::log,
     properties::{Xaml, log_failure},
-    xamlom::{IAcrylicBrush, InstanceHandle},
+    xamlom::{IAcrylicBrush, IXamlCompositionBrushBase, InstanceHandle},
 };
 
 /// Brush properties logged when a brush is first tinted; together they
@@ -35,8 +37,15 @@ const LOGGED_PROPERTIES: [&str; 5] = [
 struct Tinted {
     /// COM identity (the canonical `IUnknown` pointer) of the brush.
     identity: *mut c_void,
-    brush: IAcrylicBrush,
+    brush: Brush,
     state: BrushTint,
+}
+
+/// The two interfaces of one acrylic brush; the base is optional, since
+/// the tint alone still works without it.
+struct Brush {
+    acrylic: IAcrylicBrush,
+    base: Option<IXamlCompositionBrushBase>,
 }
 
 #[derive(Default)]
@@ -74,14 +83,20 @@ impl Tints {
         if !write_tint(&tinted.brush, target) {
             return false;
         }
-        tinted.state.applied(target);
         let now = read_tint(&tinted.brush);
+        // What the brush really holds now counts as ours: if a part of
+        // the write failed, the next push must not take that for a change
+        // by Windows (and our colour for the original).
+        tinted.state.applied(now.unwrap_or(target));
         log!(
-            "brush {value:#x} tinted {} at {}: {}",
+            "brush {value:#x} tinted {} at {}, fallback {:?}: {}",
             target.color,
             target.opacity,
+            target.fallback.map(|f| f.to_string()),
             match now {
-                Some(now) if now.color == target.color => "kept",
+                Some(now) if now.color == target.color && now.fallback == target.fallback => {
+                    "kept"
+                }
                 Some(_) => "NOT kept",
                 None => "could not read back",
             }
@@ -118,13 +133,21 @@ impl Tints {
         if let Some(slot) = self.brushes.iter().position(|t| t.identity == identity) {
             return Some(slot);
         }
-        let brush: IAcrylicBrush = match object.cast() {
+        let acrylic: IAcrylicBrush = match object.cast() {
             Ok(brush) => brush,
             Err(error) => {
                 log!("value {value:#x} is not an AcrylicBrush ({error}); left as it is");
                 return None;
             }
         };
+        let base = match object.cast::<IXamlCompositionBrushBase>() {
+            Ok(base) => Some(base),
+            Err(error) => {
+                log!("brush {value:#x}: no fallback colour interface ({error})");
+                None
+            }
+        };
+        let brush = Brush { acrylic, base };
         let current = read_tint(&brush)?;
         log_details(xaml, value, &brush, current);
         self.brushes.push(Tinted {
@@ -137,7 +160,8 @@ impl Tints {
 }
 
 /// Logs what decides the look of a brush seen for the first time.
-fn log_details(xaml: &Xaml, value: InstanceHandle, brush: &IAcrylicBrush, current: Tint) {
+fn log_details(xaml: &Xaml, value: InstanceHandle, brush: &Brush, current: Tint) {
+    let brush = &brush.acrylic;
     let (mut source, mut fallback_only) = (-1i32, 0u8);
     // SAFETY: plain calls on a live interface with writable out values.
     let (source_hr, fallback_hr) = unsafe {
@@ -147,10 +171,11 @@ fn log_details(xaml: &Xaml, value: InstanceHandle, brush: &IAcrylicBrush, curren
         )
     };
     log!(
-        "AcrylicBrush {value:#x}: tint {} at {}, background source {} ({source_hr}), \
-         always fallback {} ({fallback_hr})",
+        "AcrylicBrush {value:#x}: tint {} at {}, fallback {:?}, background source {} \
+         ({source_hr}), always fallback {} ({fallback_hr})",
         current.color,
         current.opacity,
+        current.fallback.map(|f| f.to_string()),
         match source {
             0 => "HostBackdrop",
             1 => "Backdrop",
@@ -161,14 +186,14 @@ fn log_details(xaml: &Xaml, value: InstanceHandle, brush: &IAcrylicBrush, curren
     xaml.log_chain(value, &LOGGED_PROPERTIES);
 }
 
-fn read_tint(brush: &IAcrylicBrush) -> Option<Tint> {
+fn read_tint(brush: &Brush) -> Option<Tint> {
     let mut color = windows::UI::Color::default();
     let mut opacity = 0.0;
     // SAFETY: plain calls on a live interface with writable out values.
     let (color_hr, opacity_hr) = unsafe {
         (
-            brush.get_TintColor(&mut color),
-            brush.get_TintOpacity(&mut opacity),
+            brush.acrylic.get_TintColor(&mut color),
+            brush.acrylic.get_TintOpacity(&mut opacity),
         )
     };
     if !log_failure("IAcrylicBrush::get_TintColor", color_hr)
@@ -181,27 +206,47 @@ fn read_tint(brush: &IAcrylicBrush) -> Option<Tint> {
         return None;
     }
     Some(Tint {
-        color: Argb::new(color.A, color.R, color.G, color.B),
+        color: argb(color),
         opacity,
+        fallback: brush.base.as_ref().and_then(read_fallback),
     })
 }
 
-/// Sets colour, then opacity. A failed opacity after a set colour still
-/// counts: the colour is what shows.
-fn write_tint(brush: &IAcrylicBrush, tint: Tint) -> bool {
-    let color = windows::UI::Color {
-        A: tint.color.a,
-        R: tint.color.r,
-        G: tint.color.g,
-        B: tint.color.b,
-    };
-    // SAFETY: plain calls on a live interface.
+fn read_fallback(base: &IXamlCompositionBrushBase) -> Option<Argb> {
+    let mut color = windows::UI::Color::default();
+    // SAFETY: plain call on a live interface with a writable out value.
+    let hr = unsafe { base.get_FallbackColor(&mut color) };
+    log_failure("IXamlCompositionBrushBase::get_FallbackColor", hr).then(|| argb(color))
+}
+
+fn argb(c: windows::UI::Color) -> Argb {
+    Argb::new(c.A, c.R, c.G, c.B)
+}
+
+fn ui_color(c: Argb) -> windows::UI::Color {
+    windows::UI::Color {
+        A: c.a,
+        R: c.r,
+        G: c.g,
+        B: c.b,
+    }
+}
+
+/// Sets colour, opacity and fallback. Failures after a set colour still
+/// count: the colour is what shows.
+fn write_tint(brush: &Brush, tint: Tint) -> bool {
+    // SAFETY: plain calls on live interfaces.
     let (color_hr, opacity_hr): (HRESULT, HRESULT) = unsafe {
         (
-            brush.put_TintColor(color),
-            brush.put_TintOpacity(tint.opacity),
+            brush.acrylic.put_TintColor(ui_color(tint.color)),
+            brush.acrylic.put_TintOpacity(tint.opacity),
         )
     };
     log_failure("IAcrylicBrush::put_TintOpacity", opacity_hr);
+    if let (Some(base), Some(fallback)) = (&brush.base, tint.fallback) {
+        // SAFETY: plain call on a live interface.
+        let hr = unsafe { base.put_FallbackColor(ui_color(fallback)) };
+        log_failure("IXamlCompositionBrushBase::put_FallbackColor", hr);
+    }
     log_failure("IAcrylicBrush::put_TintColor", color_hr)
 }

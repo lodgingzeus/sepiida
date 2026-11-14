@@ -285,6 +285,17 @@ pub unsafe trait IAcrylicBrush: IUnknown {
     pub fn put_AlwaysUseFallback(&self, value: u8) -> HRESULT;
 }
 
+/// `Windows.UI.Xaml.Media.IXamlCompositionBrushBase`, from the same
+/// header: the base of `AcrylicBrush` that holds `FallbackColor`.
+#[interface("03e432d9-b35c-4a79-811c-c5652004da0e")]
+pub unsafe trait IXamlCompositionBrushBase: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn get_FallbackColor(&self, value: *mut windows::UI::Color) -> HRESULT;
+    pub fn put_FallbackColor(&self, value: windows::UI::Color) -> HRESULT;
+}
+
 /// `[in] BSTR` argument: the string's pointer, or null for an empty one.
 pub fn bstr_arg(value: &BSTR) -> *const u16 {
     if value.is_empty() {

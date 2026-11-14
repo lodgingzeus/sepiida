@@ -85,6 +85,7 @@ fn start_acrylic_is_tinted_and_restored_after_its_element_left() {
     ));
     assert!(shared.has("put_TintColor #CC336699"));
     assert!(shared.has("put_TintOpacity 0.5"));
+    assert!(shared.has("put_FallbackColor #FF336699"));
     // The brush's own properties are logged once, from its chain.
     assert_eq!(
         shared.count(&format!("GetPropertyValuesChain {ACRYLIC:#x}")),
@@ -105,6 +106,7 @@ fn start_acrylic_is_tinted_and_restored_after_its_element_left() {
     send(Command::Restore);
     assert!(shared.has("put_TintColor #CC202020"));
     assert_eq!(shared.current_tint(), WINDOWS_TINT);
+    assert_eq!(shared.current_fallback(), WINDOWS_FALLBACK);
     assert!(nothing_created_or_replaced(&shared));
 
     detach(&shared);
@@ -126,11 +128,13 @@ fn a_tint_windows_changed_is_the_one_restored() {
         B: 0xf3,
     };
     *shared.tint.lock().unwrap() = Some((light, 0.6));
+    *shared.fallback.lock().unwrap() = Some(light);
     send(Command::SetColor(Role::Surface, Color::new(4, 5, 6)));
     assert!(shared.has("put_TintColor #FF040506"));
     send(Command::Restore);
     assert!(shared.has("put_TintColor #FFF3F3F3"));
     assert_eq!(shared.current_tint(), (light, 0.6));
+    assert_eq!(shared.current_fallback(), light);
 
     detach(&shared);
 }

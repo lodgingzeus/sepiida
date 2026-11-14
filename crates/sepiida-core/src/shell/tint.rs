@@ -1,8 +1,10 @@
 //! Tinting Windows' own acrylic brushes, the data side: what tint to set
 //! on a brush, and which tint is the original to put back.
 //!
-//! The DLL keeps the shell's `AcrylicBrush` and changes its `TintColor`
-//! (and, when asked, `TintOpacity`). The brush belongs to Windows, which
+//! The DLL keeps the shell's `AcrylicBrush` and changes its `TintColor`,
+//! its `FallbackColor` (drawn instead of acrylic when acrylic cannot be
+//! rendered: transparency effects off, battery saver, a weak GPU) and,
+//! when asked, its `TintOpacity`. The brush belongs to Windows, which
 //! may change its tint by itself (a theme change): whatever the brush holds
 //! that is not what we set last is Windows' value, and becomes the original.
 
@@ -56,18 +58,22 @@ impl Opacity {
     }
 }
 
-/// A brush's tint: its colour and opacity.
+/// A brush's tint: its colour and opacity, and its fallback colour if it
+/// could be read.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tint {
     pub color: Argb,
     pub opacity: f64,
+    pub fallback: Option<Argb>,
 }
 
 impl Tint {
     /// Equal up to the rounding a `double` round trip through XAML might
     /// add.
     fn same(self, other: Self) -> bool {
-        self.color == other.color && (self.opacity - other.opacity).abs() < 1e-6
+        self.color == other.color
+            && self.fallback == other.fallback
+            && (self.opacity - other.opacity).abs() < 1e-6
     }
 }
 
@@ -108,17 +114,14 @@ impl BrushTint {
         }
     }
 
-    /// The tint for `color`: our colour with the original's alpha (opaque
-    /// if the original's was zero, which would hide the tint), at
+    /// The tint for `color`: tint and fallback in our colour with the
+    /// originals' alpha (opaque if that was zero, which would hide it), at
     /// `opacity` if given, else at the original opacity.
     pub fn target(&self, color: Color, opacity: Option<Opacity>) -> Tint {
-        let alpha = match self.original.color.a {
-            0 => 0xff,
-            a => a,
-        };
         Tint {
-            color: Argb::new(alpha, color.r, color.g, color.b),
+            color: recolor(self.original.color, color),
             opacity: opacity.map_or(self.original.opacity, Opacity::fraction),
+            fallback: self.original.fallback.map(|f| recolor(f, color)),
         }
     }
 
@@ -133,6 +136,15 @@ impl BrushTint {
     }
 }
 
+/// `color` with `original`'s alpha, or opaque if that was zero.
+fn recolor(original: Argb, color: Color) -> Argb {
+    let alpha = match original.a {
+        0 => 0xff,
+        a => a,
+    };
+    Argb::new(alpha, color.r, color.g, color.b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +152,7 @@ mod tests {
     const WINDOWS: Tint = Tint {
         color: Argb::new(0xcc, 0x20, 0x20, 0x20),
         opacity: 0.5,
+        fallback: Some(Argb::new(0xff, 0x20, 0x20, 0x20)),
     };
     const BLUE: Color = Color::new(0x33, 0x66, 0x99);
 
@@ -157,6 +170,7 @@ mod tests {
         let brush = BrushTint::new(WINDOWS);
         let tint = brush.target(BLUE, None);
         assert_eq!(tint.color, Argb::new(0xcc, 0x33, 0x66, 0x99));
+        assert_eq!(tint.fallback, Some(Argb::new(0xff, 0x33, 0x66, 0x99)));
         assert_eq!(tint.opacity, 0.5);
         let tint = brush.target(BLUE, Opacity::from_percent(80));
         assert_eq!(tint.opacity, 0.8);
@@ -167,8 +181,20 @@ mod tests {
         let brush = BrushTint::new(Tint {
             color: Argb::new(0, 1, 2, 3),
             opacity: 0.0,
+            fallback: Some(Argb::new(0, 1, 2, 3)),
         });
-        assert_eq!(brush.target(BLUE, None).color.a, 0xff);
+        let tint = brush.target(BLUE, None);
+        assert_eq!(tint.color.a, 0xff);
+        assert_eq!(tint.fallback.map(|f| f.a), Some(0xff));
+    }
+
+    #[test]
+    fn an_unreadable_fallback_stays_untouched() {
+        let brush = BrushTint::new(Tint {
+            fallback: None,
+            ..WINDOWS
+        });
+        assert_eq!(brush.target(BLUE, None).fallback, None);
     }
 
     #[test]
@@ -183,6 +209,11 @@ mod tests {
             ..ours
         }));
         assert_eq!(brush.original(), WINDOWS);
+        // A fallback Windows changed alone is a change too.
+        assert!(brush.observe(Tint {
+            fallback: Some(Argb::new(0xff, 9, 9, 9)),
+            ..ours
+        }));
     }
 
     #[test]
@@ -192,6 +223,7 @@ mod tests {
         let light = Tint {
             color: Argb::new(0xcc, 0xf3, 0xf3, 0xf3),
             opacity: 0.6,
+            fallback: Some(Argb::new(0xff, 0xf3, 0xf3, 0xf3)),
         };
         assert!(brush.observe(light));
         assert_eq!(brush.original(), light);
@@ -206,6 +238,7 @@ mod tests {
         let other = Tint {
             color: Argb::new(0xff, 1, 1, 1),
             opacity: 0.1,
+            fallback: None,
         };
         assert!(!brush.observe(other));
         assert_eq!(brush.original(), other);

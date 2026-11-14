@@ -41,6 +41,14 @@ pub(super) const WINDOWS_TINT: (windows::UI::Color, f64) = (
     0.5,
 );
 
+/// The fake acrylic brush's fallback colour before anything changes it.
+pub(super) const WINDOWS_FALLBACK: windows::UI::Color = windows::UI::Color {
+    A: 0xff,
+    R: 0x20,
+    G: 0x20,
+    B: 0x20,
+};
+
 pub(super) struct SendObject(IUnknown);
 // SAFETY: test-only; the object is only called from the test thread.
 unsafe impl Send for SendObject {}
@@ -66,6 +74,8 @@ pub(super) struct Shared {
     acrylic: Mutex<Option<SendObject>>,
     /// The acrylic brush's current tint colour and opacity.
     pub(super) tint: Mutex<Option<(windows::UI::Color, f64)>>,
+    /// The acrylic brush's fallback colour; `None` is `WINDOWS_FALLBACK`.
+    pub(super) fallback: Mutex<Option<windows::UI::Color>>,
 }
 
 impl Shared {
@@ -88,13 +98,39 @@ impl Shared {
     pub(super) fn current_tint(&self) -> (windows::UI::Color, f64) {
         self.tint.lock().unwrap().unwrap_or(WINDOWS_TINT)
     }
+
+    pub(super) fn current_fallback(&self) -> windows::UI::Color {
+        self.fallback.lock().unwrap().unwrap_or(WINDOWS_FALLBACK)
+    }
 }
 
-#[implement(IAcrylicBrush)]
+#[implement(IAcrylicBrush, IXamlCompositionBrushBase)]
 pub(super) struct FakeAcrylic(Arc<Shared>);
 
 fn argb(c: windows::UI::Color) -> String {
     format!("#{:02X}{:02X}{:02X}{:02X}", c.A, c.R, c.G, c.B)
+}
+
+impl IXamlCompositionBrushBase_Impl for FakeAcrylic_Impl {
+    unsafe fn GetIids(&self, _: *mut u32, _: *mut *mut windows::core::GUID) -> HRESULT {
+        E_NOTIMPL
+    }
+    unsafe fn GetRuntimeClassName(&self, _: *mut *mut c_void) -> HRESULT {
+        E_NOTIMPL
+    }
+    unsafe fn GetTrustLevel(&self, _: *mut i32) -> HRESULT {
+        E_NOTIMPL
+    }
+    unsafe fn get_FallbackColor(&self, value: *mut windows::UI::Color) -> HRESULT {
+        // SAFETY: the DLL passes a writable pointer.
+        unsafe { *value = self.0.current_fallback() };
+        S_OK
+    }
+    unsafe fn put_FallbackColor(&self, value: windows::UI::Color) -> HRESULT {
+        self.0.record(format!("put_FallbackColor {}", argb(value)));
+        *self.0.fallback.lock().unwrap() = Some(value);
+        S_OK
+    }
 }
 
 impl IAcrylicBrush_Impl for FakeAcrylic_Impl {
