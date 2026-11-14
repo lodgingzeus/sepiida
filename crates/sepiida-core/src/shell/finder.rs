@@ -3,7 +3,10 @@
 //!
 //! Elements can arrive in any order: a candidate (right type and name) may
 //! be reported before the ancestor its rule requires. Such candidates are
-//! kept as pending and re-tested after every later addition.
+//! kept as pending and re-tested after every later addition, but only while
+//! an ancestor is still missing: a candidate whose chain reaches the root
+//! without the ancestor never matches (unnamed elements are common, and
+//! would otherwise crowd out real candidates).
 
 use std::collections::HashSet;
 
@@ -105,7 +108,7 @@ impl Finder {
                 if self.near_misses <= MAX_NEAR_MISS_REPORTS {
                     result.near_miss = Some(self.tree.path(handle));
                 }
-                if self.pending.len() < MAX_PENDING {
+                if !self.tree.reaches_root(handle) && self.pending.len() < MAX_PENDING {
                     self.pending.push(candidate);
                 }
             }
@@ -132,7 +135,11 @@ impl Finder {
             .pending
             .iter()
             .partition(|m| rules.get(m.rule).is_some_and(|r| tree.matches(m.handle, r)));
-        self.pending = still_pending;
+        // Those whose chain is now complete without a match never will.
+        self.pending = still_pending
+            .into_iter()
+            .filter(|m| !tree.reaches_root(m.handle))
+            .collect();
         for found in now_matched {
             if self.matched.insert(found) {
                 result.matched.push(found);
@@ -166,7 +173,7 @@ impl Finder {
 mod tests {
     use super::*;
     use crate::shell::rules::{
-        Paint, RECTANGLE_TYPE, Role, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME, TASKBAR_RULES,
+        Effect, Paint, RECTANGLE_TYPE, Role, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME, TASKBAR_RULES,
     };
 
     const GRID: &str = "Windows.UI.Xaml.Controls.Grid";
@@ -174,8 +181,12 @@ mod tests {
     const BACKGROUND_TYPE: &str = "Taskbar.TaskbarBackground";
     const FILL: &str = TASKBAR_BACKGROUND.name;
 
+    /// The taskbar's colour rule alone; the look rules on the same
+    /// rectangle have a test of their own.
+    static FILL_ONLY: [Rule; 1] = [TASKBAR_BACKGROUND];
+
     fn taskbar_finder() -> Finder {
-        Finder::new(TASKBAR_RULES)
+        Finder::new(&FILL_ONLY)
     }
 
     fn hit(handle: Handle) -> Match {
@@ -307,9 +318,12 @@ mod tests {
             type_name: "Windows.UI.Xaml.Controls.Border",
             name: "Acrylic",
             ancestor: None,
+            parent: None,
             property: "Background",
-            paint: Paint::Tint,
-            role: Role::Accent,
+            effect: Effect::Color {
+                paint: Paint::Tint,
+                role: Role::Accent,
+            },
         },
     ];
 
@@ -318,12 +332,83 @@ mod tests {
         let mut finder = Finder::new(&TWO_RULES);
         let added = finder.added(8, 0, "Windows.UI.Xaml.Controls.Border", "Acrylic");
         assert_eq!(added.matched, vec![Match { handle: 8, rule: 1 }]);
-        assert_eq!(finder.rule(1).map(|r| r.role), Some(Role::Accent));
+        assert!(matches!(
+            finder.rule(1).map(|r| r.effect),
+            Some(Effect::Color {
+                role: Role::Accent,
+                ..
+            })
+        ));
         assert_eq!(finder.rule(2), None);
         finder.added(1, 0, FRAME_TYPE, TASKBAR_FRAME_NAME);
         assert_eq!(
             finder.added(5, 1, RECTANGLE_TYPE, FILL).matched,
             vec![hit(5)]
         );
+    }
+
+    #[test]
+    fn every_rule_on_one_element_matches_it() {
+        let mut finder = Finder::new(TASKBAR_RULES);
+        finder.added(1, 0, FRAME_TYPE, TASKBAR_FRAME_NAME);
+        let on_fill: Vec<RuleId> = TASKBAR_RULES
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.name == FILL)
+            .map(|(id, _)| id)
+            .collect();
+        assert!(on_fill.len() > 1);
+        let matched: Vec<RuleId> = finder
+            .added(5, 1, RECTANGLE_TYPE, FILL)
+            .matched
+            .into_iter()
+            .map(|m| m.rule)
+            .collect();
+        assert_eq!(matched, on_fill);
+    }
+
+    static UNNAMED_GRID: [Rule; 1] = [Rule {
+        label: "unnamed grid",
+        type_name: GRID,
+        name: "",
+        ancestor: Some("BackgroundControl"),
+        parent: None,
+        property: "Background",
+        effect: Effect::Color {
+            paint: Paint::Tint,
+            role: Role::Surface,
+        },
+    }];
+
+    #[test]
+    fn unnamed_candidates_with_a_complete_chain_do_not_crowd_out_pending_ones() {
+        let mut finder = Finder::new(&UNNAMED_GRID);
+        finder.added(1, 0, FRAME_TYPE, TASKBAR_FRAME_NAME);
+        for handle in 10..(10 + MAX_PENDING as Handle * 2) {
+            finder.added(handle, 1, GRID, "");
+        }
+        assert!(finder.pending.is_empty());
+        // The real one arrives before its ancestor, and still matches.
+        finder.added(500, 400, GRID, "");
+        assert_eq!(finder.pending.len(), 1);
+        let added = finder.added(400, 1, BACKGROUND_TYPE, "BackgroundControl");
+        assert_eq!(
+            added.matched,
+            vec![Match {
+                handle: 500,
+                rule: 0
+            }]
+        );
+        assert!(finder.pending.is_empty());
+    }
+
+    #[test]
+    fn a_pending_candidate_is_dropped_once_its_chain_completes_without_a_match() {
+        let mut finder = Finder::new(&UNNAMED_GRID);
+        finder.added(500, 400, GRID, "");
+        assert_eq!(finder.pending.len(), 1);
+        finder.added(400, 0, BACKGROUND_TYPE, "Elsewhere");
+        assert!(finder.pending.is_empty());
+        assert_eq!(finder.matched_count(), 0);
     }
 }

@@ -112,6 +112,25 @@ impl ElementTree {
         })
     }
 
+    /// Whether the element's chain of parents is known all the way to the
+    /// tree's root. A complete chain cannot gain ancestors later (XAML
+    /// reports a move as a removal and an addition), so a rule that does
+    /// not match such an element never will.
+    pub fn reaches_root(&self, handle: Handle) -> bool {
+        let mut current = handle;
+        for _ in 0..=self.elements.len() {
+            match self.elements.get(&current) {
+                None => return false,
+                Some(element) => match element.parent {
+                    None => return true,
+                    Some(parent) => current = parent,
+                },
+            }
+        }
+        // A cycle: never complete.
+        false
+    }
+
     /// The element and its known ancestors as `Type#Name < Type#Name < …`,
     /// nearest first, for logs. At most `MAX_PATH_DEPTH` ancestors.
     pub fn path(&self, handle: Handle) -> String {
@@ -139,6 +158,12 @@ impl ElementTree {
             return false;
         };
         rule.selects(&element.type_name, &element.name)
+            && rule.parent.is_none_or(|name| {
+                element
+                    .parent
+                    .and_then(|parent| self.elements.get(&parent))
+                    .is_some_and(|parent| &*parent.name == name)
+            })
             && rule
                 .ancestor
                 .is_none_or(|name| self.ancestors(handle).any(|a| &*a.name == name))
@@ -315,5 +340,43 @@ mod tests {
         // Known elements can still be updated.
         assert!(tree.add(1, 0, GRID, "renamed"));
         assert_eq!(tree.len(), MAX_ELEMENTS);
+    }
+
+    #[test]
+    fn a_chain_reaches_the_root_only_once_every_parent_is_known() {
+        let mut tree = ElementTree::new();
+        tree.add(3, 2, "C", "");
+        assert!(!tree.reaches_root(3));
+        tree.add(2, 1, "B", "");
+        assert!(!tree.reaches_root(3));
+        tree.add(1, 0, "A", "");
+        assert!(tree.reaches_root(3));
+        assert!(tree.reaches_root(1));
+        assert!(!tree.reaches_root(99));
+        // A cycle never counts as complete.
+        tree.add(10, 11, "X", "");
+        tree.add(11, 10, "Y", "");
+        assert!(!tree.reaches_root(10));
+    }
+
+    #[test]
+    fn a_parent_rule_needs_the_direct_parent_by_name() {
+        let rule = Rule {
+            label: "frame grid",
+            type_name: GRID,
+            name: "RootGrid",
+            ancestor: None,
+            parent: Some(TASKBAR_FRAME_NAME),
+            ..TASKBAR_BACKGROUND
+        };
+        let tree = taskbar();
+        assert!(tree.matches(2, &rule));
+        let mut tree = taskbar();
+        // A RootGrid deeper down, under the frame but not its child.
+        tree.add(20, 4, GRID, "RootGrid");
+        assert!(!tree.matches(20, &rule));
+        // Parent not known yet.
+        tree.add(30, 29, GRID, "RootGrid");
+        assert!(!tree.matches(30, &rule));
     }
 }

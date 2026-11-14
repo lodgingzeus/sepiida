@@ -17,7 +17,9 @@ use sepiida_core::{
     Color,
     shell::hosts::Host,
     shell::protocol::{CONTROL_WINDOW_CLASS, Command, TAP_CLSID},
-    shell::rules::{Paint, RECTANGLE_TYPE, Role, Rule, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME},
+    shell::rules::{
+        Effect, Paint, RECTANGLE_TYPE, Role, Rule, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME,
+    },
 };
 use windows::{
     Win32::{
@@ -33,6 +35,7 @@ use windows::{
 use crate::{DllGetClassObject, tap::Factory, xamlom::*};
 
 mod fake;
+mod layout;
 mod tint;
 
 use fake::*;
@@ -42,7 +45,10 @@ const BRUSH: &str = "Windows.UI.Xaml.Media.SolidColorBrush";
 
 /// The taskbar background painted solid, as before M4 moved it to tint.
 static SOLID_TASKBAR: [Rule; 1] = [Rule {
-    paint: Paint::Solid,
+    effect: Effect::Color {
+        paint: Paint::Solid,
+        role: Role::Surface,
+    },
     ..TASKBAR_BACKGROUND
 }];
 

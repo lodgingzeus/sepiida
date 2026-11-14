@@ -2,7 +2,7 @@
 //! indices, values, new instances and the objects behind handles. Every
 //! failure is logged here, since each Windows round trip is expensive.
 
-use sepiida_core::shell::tree::Handle;
+use sepiida_core::shell::{layout::ValueSource, tree::Handle};
 use windows::{
     Win32::System::Com::CoTaskMemFree,
     core::{BSTR, HRESULT, HSTRING, IUnknown, Interface, PCWSTR},
@@ -145,6 +145,29 @@ impl Xaml {
         index
     }
 
+    /// The index of `property` on `handle` and its effective entry (the one
+    /// no other entry overrides). Logs every entry of the property.
+    pub fn effective(&self, handle: InstanceHandle, property: &str) -> Option<(u32, Entry)> {
+        let chain = self.chain(handle);
+        let Some(index) = chain.log(handle, property) else {
+            log!("{property} not in the property chain of {handle:#x}");
+            return None;
+        };
+        let entry = chain.effective(property);
+        if entry.is_none() {
+            log!("{property} of {handle:#x} has no effective entry");
+        }
+        entry.map(|entry| (index, entry))
+    }
+
+    /// The effective value of `property` on `handle` as XAML formats it,
+    /// without logging (for values read again and again).
+    pub fn value(&self, handle: InstanceHandle, property: &str) -> Option<String> {
+        self.chain(handle)
+            .effective(property)
+            .map(|entry| entry.value)
+    }
+
     /// Logs the chain entries of each of `properties` on `handle`, from one
     /// chain read.
     pub fn log_chain(&self, handle: InstanceHandle, properties: &[&str]) {
@@ -184,6 +207,16 @@ impl Xaml {
     }
 }
 
+/// A property's effective value, as the property chain reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    /// The property's type, e.g. `Windows.UI.Xaml.Thickness`.
+    pub type_name: String,
+    pub source: ValueSource,
+    /// The value as XAML formats it.
+    pub value: String,
+}
+
 /// One element's property chain, as XAML reported it.
 struct Chain {
     sources: Vec<PropertyChainSource>,
@@ -215,6 +248,22 @@ impl Chain {
         }
         // Every entry of one property carries the same index.
         entries.first().map(|value| value.Index)
+    }
+
+    fn effective(&self, property: &str) -> Option<Entry> {
+        let value = self
+            .values
+            .iter()
+            .find(|v| v.PropertyName == property && !v.Overridden.as_bool())?;
+        let source = self
+            .sources
+            .get(value.PropertyChainIndex as usize)
+            .map_or(ValueSource::Other, |s| ValueSource::from_id(s.Source.0));
+        Some(Entry {
+            type_name: value.Type.to_string(),
+            source,
+            value: value.Value.to_string(),
+        })
     }
 }
 

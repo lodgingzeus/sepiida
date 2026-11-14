@@ -28,6 +28,13 @@ pub(super) const ORIGINAL_FILL: InstanceHandle = 0x100;
 pub(super) const LIVE_FILL: InstanceHandle = 0x200;
 pub(super) const RECT_HANDLE: InstanceHandle = 5;
 pub(super) const BACKGROUND_INDEX: u32 = 11;
+/// Layout properties in the fake chain, each from a different source.
+pub(super) const MARGIN_INDEX: u32 = 13;
+pub(super) const RADIUS_X_INDEX: u32 = 14;
+pub(super) const RADIUS_Y_INDEX: u32 = 15;
+pub(super) const VISIBILITY_INDEX: u32 = 16;
+/// The margin the fake element has as a local value.
+pub(super) const LOCAL_MARGIN: &str = "1,2,3,4";
 /// Windows' own acrylic brush on a sandboxed host's surface.
 pub(super) const ACRYLIC: InstanceHandle = 0x400;
 /// The fake acrylic brush's tint before anything changes it.
@@ -221,7 +228,12 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
         value: *const u16,
         instance: *mut InstanceHandle,
     ) -> HRESULT {
-        let handle = 0x1000 + self.0.next_handle.fetch_add(1, Ordering::SeqCst);
+        // A new acrylic brush is the fake acrylic brush.
+        let handle = if text(type_name) == "Windows.UI.Xaml.Media.AcrylicBrush" {
+            ACRYLIC
+        } else {
+            0x1000 + self.0.next_handle.fetch_add(1, Ordering::SeqCst)
+        };
         self.0.record(format!(
             "CreateInstance {} {} -> {handle:#x}",
             text(type_name),
@@ -243,17 +255,21 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
             .record(format!("GetPropertyValuesChain {instance:#x}"));
         // SAFETY: CoTaskMemAlloc'd arrays handed to the caller like XAML
         // does; the caller frees them. Like Explorer's chain, it lists
-        // each property with the index `SetProperty` takes.
+        // each property with the index `SetProperty` takes, and where its
+        // value comes from: sources 0 style, 1 local, 2 visual state.
         unsafe {
+            let source_list = [(3, "Style"), (4, "Local"), (14, "VisualState")];
             let source: *mut PropertyChainSource =
-                CoTaskMemAlloc(size_of::<PropertyChainSource>()).cast();
-            source.write(PropertyChainSource {
-                Handle: instance,
-                TargetType: BSTR::from("Target"),
-                Name: BSTR::from("Style"),
-                Source: BaseValueSource(3),
-                SrcInfo: empty_source_info(),
-            });
+                CoTaskMemAlloc(size_of::<PropertyChainSource>() * source_list.len()).cast();
+            for (i, (id, name)) in source_list.into_iter().enumerate() {
+                source.add(i).write(PropertyChainSource {
+                    Handle: instance,
+                    TargetType: BSTR::from("Target"),
+                    Name: BSTR::from(name),
+                    Source: BaseValueSource(id),
+                    SrcInfo: empty_source_info(),
+                });
+            }
             let chain = [
                 chain_value(FILL_INDEX, "Fill", "Windows.UI.Xaml.Media.Brush"),
                 chain_value(COLOR_INDEX, "Color", "Windows.UI.Color"),
@@ -261,6 +277,34 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
                     BACKGROUND_INDEX,
                     "Background",
                     "Windows.UI.Xaml.Media.Brush",
+                ),
+                layout_value(
+                    MARGIN_INDEX,
+                    "Margin",
+                    "Windows.UI.Xaml.Thickness",
+                    LOCAL_MARGIN,
+                    1,
+                ),
+                layout_value(
+                    RADIUS_X_INDEX,
+                    "RadiusX",
+                    "Windows.Foundation.Double",
+                    "0",
+                    0,
+                ),
+                layout_value(
+                    RADIUS_Y_INDEX,
+                    "RadiusY",
+                    "Windows.Foundation.Double",
+                    "0",
+                    2,
+                ),
+                layout_value(
+                    VISIBILITY_INDEX,
+                    "Visibility",
+                    "Windows.UI.Xaml.Visibility",
+                    "Visible",
+                    0,
                 ),
             ];
             let chain_len = chain.len() as u32;
@@ -270,7 +314,7 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
                 value.add(i).write(entry);
             }
             *sources = source;
-            *source_count = 1;
+            *source_count = source_list.len() as u32;
             *values = value;
             *property_count = chain_len;
         }
@@ -480,6 +524,21 @@ pub(super) fn chain_value(index: u32, name: &str, type_name: &str) -> PropertyCh
         MetadataBits: 0,
         PropertyName: BSTR::from(name),
         PropertyChainIndex: 0,
+    }
+}
+
+/// A chain entry with a value and a source (an index into the sources).
+fn layout_value(
+    index: u32,
+    name: &str,
+    type_name: &str,
+    value: &str,
+    source: u32,
+) -> PropertyChainValue {
+    PropertyChainValue {
+        Value: BSTR::from(value),
+        PropertyChainIndex: source,
+        ..chain_value(index, name, type_name)
     }
 }
 

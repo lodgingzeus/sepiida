@@ -44,13 +44,17 @@ taskbar, Start and flyouts\" is on in the settings):
   opacity <0-100|default>
                      tint opacity of the tinted surfaces, in percent, or
                      Windows' own
-  restore            put the original backgrounds back
+  look <on|off>      turn the look (taskbar layout) on or off; colours stay.
+                     Not kept across an Explorer restart yet
+  restore            put the original backgrounds and layout back
   detach             restore and stop watching (the DLL stays loaded until
                      the process restarts)
   dump [--delay N]   log the element tree of Start and the notification centre
                      (attaches to StartMenuExperienceHost, ShellExperienceHost
                      and ShellHost; open each surface afterwards). --delay waits
                      N seconds first, to open a flyout (Win+N) before it attaches
+  dump taskbar       log the taskbar's element tree (Explorer) into hook.log;
+                     quit the tray app first, restart Explorer afterwards
   dump collect       copy those logs into %LOCALAPPDATA%\\sepiida\\logs
   dump stop          stop dumping";
 
@@ -84,6 +88,8 @@ pub enum ShellCommand {
     Color(Color),
     /// `None` is Windows' own opacity.
     Opacity(Option<Opacity>),
+    /// Turn the look (layout rules) on or off.
+    Look(bool),
     Restore,
     Detach,
     Dump(DumpAction),
@@ -107,6 +113,9 @@ pub enum DumpAction {
     /// this many seconds (time to open a flyout whose XAML only exists
     /// while it is shown).
     Start { delay_secs: u32 },
+    /// Attach in dump mode to Explorer, whose taskbar tree goes to
+    /// sepiida's own `hook.log` (Explorer is not sandboxed).
+    Taskbar,
     /// Copy the dump logs from the hosts' temp folders to sepiida's logs.
     Collect,
     /// Detach the dumping copies.
@@ -171,7 +180,8 @@ pub enum CliError {
     #[error(
         "`shell` takes one of: attach [--from N] [--remote], \
          attach start|quick-settings|notifications [--delay N], color <rrggbb>, \
-         opacity <0-100|default>, restore, detach, dump [--delay N | collect | stop]"
+         opacity <0-100|default>, look <on|off>, restore, detach, \
+         dump [--delay N | taskbar | collect | stop]"
     )]
     ShellArguments,
 }
@@ -294,11 +304,14 @@ fn parse_shell(args: &[&str]) -> Result<ShellCommand, CliError> {
                 .map(ShellCommand::Color)
                 .map_err(|e: sepiida_core::InvalidColor| CliError::InvalidValue(e.to_string()))
         }
+        ["look", "on"] => Ok(ShellCommand::Look(true)),
+        ["look", "off"] => Ok(ShellCommand::Look(false)),
         ["restore"] => Ok(ShellCommand::Restore),
         ["detach"] => Ok(ShellCommand::Detach),
         ["dump"] => Ok(ShellCommand::Dump(DumpAction::Start { delay_secs: 0 })),
         ["dump", "--delay", seconds] => parse_delay(seconds)
             .map(|delay_secs| ShellCommand::Dump(DumpAction::Start { delay_secs })),
+        ["dump", "taskbar"] => Ok(ShellCommand::Dump(DumpAction::Taskbar)),
         ["dump", "collect"] => Ok(ShellCommand::Dump(DumpAction::Collect)),
         ["dump", "stop"] => Ok(ShellCommand::Dump(DumpAction::Stop)),
         _ => Err(CliError::ShellArguments),

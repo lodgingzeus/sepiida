@@ -196,6 +196,9 @@ fn on_change(
                 state.styler.found(found, rule);
             }
         }
+        if state.styler.look_on() {
+            control::schedule_relayout();
+        }
         let now = Instant::now();
         if state
             .last_recheck
@@ -203,6 +206,17 @@ fn on_change(
         {
             state.last_recheck = Some(now);
             state.styler.recheck_tints();
+        }
+    });
+}
+
+/// Re-measures the look's layout (the control window's timer).
+pub fn relayout() {
+    STATE.with(|cell| {
+        if let Ok(mut slot) = cell.try_borrow_mut()
+            && let Some(state) = slot.as_mut()
+        {
+            state.styler.relayout();
         }
     });
 }
@@ -233,6 +247,16 @@ pub fn run_command(command: Command) {
             Command::SetTintOpacity(role, opacity) => {
                 if let Some(state) = slot.as_mut() {
                     state.styler.set_opacity(role, opacity);
+                }
+                None
+            }
+            Command::SetLook(on) => {
+                if let Some(state) = slot.as_mut() {
+                    state.styler.set_look(on);
+                    if on {
+                        // Again once the new layout has settled.
+                        control::schedule_relayout();
+                    }
                 }
                 None
             }

@@ -1,6 +1,6 @@
 //! The elements the rules select, and painting them with their role's
 //! colour: a shared solid brush per role (`solid`) or a tint on Windows'
-//! own acrylic brush (`tint`).
+//! own acrylic brush (`tint`). Look rules go to `layout`.
 //!
 //! The original value is captured when a target is painted, not when it is
 //! found: Explorer may replace the value later (a theme or mode change),
@@ -12,14 +12,14 @@ use sepiida_core::{
     Color,
     shell::{
         finder::Match,
-        rules::{Paint, Role, Rule},
+        rules::{Effect, Paint, Role, Rule},
         tint::Opacity,
         tree::Handle,
     },
 };
 use windows::core::IUnknown;
 
-use super::{solid::SolidBrushes, tint::Tints};
+use super::{layout::Layouts, solid::SolidBrushes, tint::Tints};
 use crate::{
     log::log,
     properties::Xaml,
@@ -58,6 +58,7 @@ pub struct Styler {
     opacities: HashMap<Role, Opacity>,
     solid: SolidBrushes,
     tints: Tints,
+    layouts: Layouts,
     targets: HashMap<Match, Target>,
 }
 
@@ -69,6 +70,7 @@ impl Styler {
             opacities: HashMap::new(),
             solid: SolidBrushes::default(),
             tints: Tints::default(),
+            layouts: Layouts::default(),
             targets: HashMap::new(),
         }
     }
@@ -76,6 +78,23 @@ impl Styler {
     /// An element `rule` styles appeared. Paints it if its role has a
     /// colour.
     pub fn found(&mut self, found: Match, rule: &'static Rule) {
+        let (paint, role) = match rule.effect {
+            Effect::Color { paint, role } => (paint, role),
+            Effect::Measure(part) => {
+                self.layouts
+                    .measure(&self.xaml, found, rule.label, rule.property, part);
+                return;
+            }
+            Effect::Probe => {
+                self.layouts.probe(found.handle, rule.label);
+                return;
+            }
+            Effect::Set(value) => {
+                self.layouts
+                    .found(&self.xaml, found, rule.label, rule.property, value);
+                return;
+            }
+        };
         if self.targets.contains_key(&found) {
             return;
         }
@@ -85,7 +104,7 @@ impl Styler {
             return;
         };
         log!("{} index {property_index}", rule.property);
-        if rule.paint == Paint::LogOnly {
+        if paint == Paint::LogOnly {
             // The chain read for the index has logged the value.
             return;
         }
@@ -94,15 +113,15 @@ impl Styler {
             Target {
                 label: rule.label,
                 property_index,
-                paint: rule.paint,
-                role: rule.role,
+                paint,
+                role,
                 original: None,
                 styled: false,
                 tinted: None,
             },
         );
-        match rule.paint {
-            Paint::Solid if self.ensure_brush(rule.role) => self.paint(found),
+        match paint {
+            Paint::Solid if self.ensure_brush(role) => self.paint(found),
             Paint::Tint => self.tint(found),
             Paint::Solid | Paint::LogOnly => {}
         }
@@ -110,6 +129,7 @@ impl Styler {
 
     /// Elements that left the tree. Nothing to restore on them.
     pub fn forget(&mut self, handles: &[Handle]) {
+        self.layouts.forget(handles);
         self.targets.retain(|found, target| {
             let keep = !handles.contains(&found.handle);
             if !keep {
@@ -127,6 +147,8 @@ impl Styler {
     /// the colour too.
     pub fn set_color(&mut self, role: Role, color: Color) {
         self.colors.insert(role, color);
+        let opacity = self.opacities.get(&role).copied();
+        self.layouts.set_color(&self.xaml, role, color, opacity);
         let solid = self.targets_of(role, Paint::Solid);
         let tinted = self.targets_of(role, Paint::Tint);
         if !solid.is_empty() && self.ensure_brush(role) {
@@ -147,10 +169,11 @@ impl Styler {
             Some(opacity) => self.opacities.insert(role, opacity),
             None => self.opacities.remove(&role),
         };
-        if !self.colors.contains_key(&role) {
+        let Some(&color) = self.colors.get(&role) else {
             log!("{role:?} has no colour yet; opacity kept for later");
             return;
-        }
+        };
+        self.layouts.set_color(&self.xaml, role, color, opacity);
         let tinted = self.targets_of(role, Paint::Tint);
         self.tint_all(role, &tinted);
     }
@@ -169,7 +192,23 @@ impl Styler {
         self.tints.retint_others(role, color, opacity)
     }
 
+    /// Turns the look rules on or off.
+    pub fn set_look(&mut self, on: bool) {
+        self.layouts.set_on(&self.xaml, on);
+    }
+
+    pub fn look_on(&self) -> bool {
+        self.layouts.is_on()
+    }
+
+    /// Re-measures the look's layout.
+    pub fn relayout(&mut self) {
+        self.layouts.relayout(&self.xaml);
+    }
+
+    /// Puts back the original colours and layout; the look is off after.
     pub fn restore_all(&mut self) {
+        self.layouts.restore_all(&self.xaml);
         self.colors.clear();
         self.opacities.clear();
         self.tints.restore_all();

@@ -13,14 +13,20 @@ use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_MESSAGE, RegisterClassExW,
-            WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_MESSAGE, KillTimer,
+            RegisterClassExW, SetTimer, WINDOW_EX_STYLE, WINDOW_STYLE, WM_TIMER, WNDCLASSEXW,
         },
     },
     core::{HSTRING, PCWSTR},
 };
 
 use crate::{guard, log::log, module, watcher};
+
+/// Timer that re-measures the look's layout once the tree has settled.
+const RELAYOUT_TIMER: usize = 1;
+/// Quiet time after the last tree change before re-measuring: long enough
+/// for XAML's layout pass, short enough not to be seen.
+const RELAYOUT_DELAY_MS: u32 = 300;
 
 thread_local! {
     static WINDOW: Cell<Option<HWND>> = const { Cell::new(None) };
@@ -72,6 +78,17 @@ pub fn ensure_window() {
     }
 }
 
+/// Re-measures the look's layout `RELAYOUT_DELAY_MS` from now; a later call
+/// restarts the wait.
+pub fn schedule_relayout() {
+    if let Some(window) = WINDOW.with(Cell::get) {
+        // SAFETY: our own window, on its thread.
+        if unsafe { SetTimer(Some(window), RELAYOUT_TIMER, RELAYOUT_DELAY_MS, None) } == 0 {
+            log!("SetTimer failed");
+        }
+    }
+}
+
 pub fn destroy_window() {
     if let Some(window) = WINDOW.with(Cell::take) {
         // SAFETY: the window was created on this thread.
@@ -90,6 +107,12 @@ extern "system" fn window_proc(
     // SAFETY (fallback and default): forwarding the arguments we received.
     let default = || unsafe { DefWindowProcW(window, message, wparam, lparam) };
     guard("window procedure", LRESULT(0), || {
+        if message == WM_TIMER && wparam.0 == RELAYOUT_TIMER {
+            // SAFETY: our own window and timer.
+            let _ = unsafe { KillTimer(Some(window), RELAYOUT_TIMER) };
+            watcher::relayout();
+            return LRESULT(0);
+        }
         match Command::decode(message, wparam.0) {
             Some(command) => {
                 watcher::run_command(command);

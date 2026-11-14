@@ -6,6 +6,11 @@
 //! attached from sepiida.exe in dump mode, and writes its log to the host's
 //! own temp folder (`%LOCALAPPDATA%\Packages\<package>\AC\Temp`), which
 //! `collect` copies into sepiida's log folder.
+//!
+//! `dump taskbar` does the same for Explorer. Explorer is not sandboxed, so
+//! the DLL writes to sepiida's own `hook.log`. Explorer allows one XAML
+//! diagnostics consumer per core, so a dump there may take the place of the
+//! styling copy: the user quits the agent first and restarts Explorer after.
 
 use std::{
     fs,
@@ -27,6 +32,7 @@ use crate::{
 pub fn run(action: DumpAction) -> Result<()> {
     match action {
         DumpAction::Start { delay_secs } => start(delay_secs),
+        DumpAction::Taskbar => taskbar(),
         DumpAction::Collect => collect(),
         DumpAction::Stop => stop(),
     }
@@ -50,21 +56,7 @@ fn start(delay_secs: u32) -> Result<()> {
         return Ok(());
     }
     for host in &hosts {
-        match shell_hook::attach_dump(host.pid, &dll) {
-            Ok(answered) if answered.is_empty() => println!(
-                "{} (pid {}): no XAML diagnostics port answered",
-                host.name, host.pid
-            ),
-            Ok(answered) => {
-                for (connection, hr) in answered {
-                    println!(
-                        "{} (pid {}): VisualDiagConnection{connection} returned {:#010x}",
-                        host.name, host.pid, hr.0
-                    );
-                }
-            }
-            Err(error) => println!("{} (pid {}): {error:#}", host.name, host.pid),
-        }
+        attach_and_report(&host.name, host.pid, &dll);
     }
     println!(
         "\nNow open each surface once, so its elements are created: Start (also \
@@ -72,6 +64,40 @@ fn start(delay_secs: u32) -> Result<()> {
          (Win+A). Then run `sepiida shell dump collect`."
     );
     Ok(())
+}
+
+fn taskbar() -> Result<()> {
+    let dll = shell_hook::hook_dll_path()?;
+    let taskbar = shell_hook::taskbar()?;
+    attach_and_report("explorer.exe", taskbar.pid, &dll);
+    let log = Paths::locate()?.log_dir.join("hook.log");
+    println!(
+        "\nThe taskbar's elements are logged as `tree add` lines in {}. Open the \
+         taskbar's flyouts once (hidden icons, a thumbnail preview) so they are \
+         logged too. When done, restart Explorer (Task Manager > Windows Explorer > \
+         Restart) to remove the dumping copy, then start sepiida again.",
+        log.display()
+    );
+    Ok(())
+}
+
+/// Attaches in dump mode to one process and prints what each connection
+/// answered.
+fn attach_and_report(name: &str, pid: u32, dll: &Path) {
+    match shell_hook::attach_dump(pid, dll) {
+        Ok(answered) if answered.is_empty() => {
+            println!("{name} (pid {pid}): no XAML diagnostics port answered");
+        }
+        Ok(answered) => {
+            for (connection, hr) in answered {
+                println!(
+                    "{name} (pid {pid}): VisualDiagConnection{connection} returned {:#010x}",
+                    hr.0
+                );
+            }
+        }
+        Err(error) => println!("{name} (pid {pid}): {error:#}"),
+    }
 }
 
 fn stop() -> Result<()> {

@@ -135,6 +135,7 @@ fn shell(command: ShellCommand) -> Result<()> {
         ShellCommand::Opacity(opacity) => {
             shell::surfaces::broadcast(Command::SetTintOpacity(Role::Surface, opacity))
         }
+        ShellCommand::Look(on) => shell::surfaces::broadcast(Command::SetLook(on)),
         ShellCommand::Restore => shell::surfaces::broadcast(Command::Restore),
         ShellCommand::Detach => shell::surfaces::broadcast(Command::Detach),
         ShellCommand::Dump(action) => shell::dump::run(action),

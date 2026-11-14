@@ -61,9 +61,31 @@ struct Tinted {
 
 /// The two interfaces of one acrylic brush; the base is optional, since
 /// the tint alone still works without it.
-struct Brush {
+pub(super) struct Brush {
     acrylic: IAcrylicBrush,
     base: Option<IXamlCompositionBrushBase>,
+}
+
+impl Brush {
+    /// The brush behind `object`, or `None` (logged) if it is not an
+    /// `AcrylicBrush`. `value` is its handle, for the log.
+    pub(super) fn from_object(object: &IUnknown, value: InstanceHandle) -> Option<Self> {
+        let acrylic: IAcrylicBrush = match object.cast() {
+            Ok(brush) => brush,
+            Err(error) => {
+                log!("value {value:#x} is not an AcrylicBrush ({error}); left as it is");
+                return None;
+            }
+        };
+        let base = match object.cast::<IXamlCompositionBrushBase>() {
+            Ok(base) => Some(base),
+            Err(error) => {
+                log!("brush {value:#x}: no fallback colour interface ({error})");
+                None
+            }
+        };
+        Some(Self { acrylic, base })
+    }
 }
 
 #[derive(Default)]
@@ -221,21 +243,7 @@ impl Tints {
         if let Some(slot) = self.brushes.iter().position(|t| t.identity == identity) {
             return Some(slot);
         }
-        let acrylic: IAcrylicBrush = match object.cast() {
-            Ok(brush) => brush,
-            Err(error) => {
-                log!("value {value:#x} is not an AcrylicBrush ({error}); left as it is");
-                return None;
-            }
-        };
-        let base = match object.cast::<IXamlCompositionBrushBase>() {
-            Ok(base) => Some(base),
-            Err(error) => {
-                log!("brush {value:#x}: no fallback colour interface ({error})");
-                None
-            }
-        };
-        let brush = Brush { acrylic, base };
+        let brush = Brush::from_object(&object, value)?;
         let current = read_tint(&brush)?;
         log_details(xaml, value, &brush, current);
         self.brushes.push(Tinted {
@@ -252,7 +260,7 @@ impl Tints {
 }
 
 /// Logs what decides the look of a brush seen for the first time.
-fn log_details(xaml: &Xaml, value: InstanceHandle, brush: &Brush, current: Tint) {
+pub(super) fn log_details(xaml: &Xaml, value: InstanceHandle, brush: &Brush, current: Tint) {
     let brush = &brush.acrylic;
     let (mut source, mut fallback_only) = (-1i32, 0u8);
     // SAFETY: plain calls on a live interface with writable out values.
@@ -278,7 +286,7 @@ fn log_details(xaml: &Xaml, value: InstanceHandle, brush: &Brush, current: Tint)
     xaml.log_chain(value, &LOGGED_PROPERTIES);
 }
 
-fn read_tint(brush: &Brush) -> Option<Tint> {
+pub(super) fn read_tint(brush: &Brush) -> Option<Tint> {
     let mut color = windows::UI::Color::default();
     let mut opacity = 0.0;
     // SAFETY: plain calls on a live interface with writable out values.
@@ -326,7 +334,7 @@ fn ui_color(c: Argb) -> windows::UI::Color {
 
 /// Sets colour, opacity and fallback. Failures after a set colour still
 /// count: the colour is what shows.
-fn write_tint(brush: &Brush, tint: Tint) -> bool {
+pub(super) fn write_tint(brush: &Brush, tint: Tint) -> bool {
     // SAFETY: plain calls on live interfaces.
     let (color_hr, opacity_hr): (HRESULT, HRESULT) = unsafe {
         (

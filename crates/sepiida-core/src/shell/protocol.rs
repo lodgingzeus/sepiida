@@ -21,7 +21,7 @@ pub const CONTROL_WINDOW_CLASS: &str = "sepiida.hook.control";
 /// Version of the commands below. Bumped whenever their meaning changes;
 /// sepiida.exe sends commands only to control windows of its own version,
 /// except `Detach`, which every version understands.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Title of a control window speaking `PROTOCOL_VERSION`.
 pub fn control_window_title() -> String {
@@ -84,6 +84,7 @@ const MSG_RESTORE: u32 = WM_APP + 0x5e2;
 const MSG_DETACH: u32 = WM_APP + 0x5e3;
 const MSG_SET_COLOR: u32 = WM_APP + 0x5e4;
 const MSG_SET_TINT_OPACITY: u32 = WM_APP + 0x5e5;
+const MSG_SET_LOOK: u32 = WM_APP + 0x5e6;
 /// `SetTintOpacity`'s value byte for "Windows' own opacity".
 const OPACITY_ORIGINAL: usize = 0xff;
 
@@ -94,7 +95,10 @@ pub enum Command {
     /// Tint the acrylic of every tinted target of this role at this
     /// opacity; `None` goes back to Windows' own opacity.
     SetTintOpacity(Role, Option<Opacity>),
-    /// Put back the original brushes and keep watching.
+    /// Turn the look rules (layout) on or off; off puts the original
+    /// values back. Colours are not affected.
+    SetLook(bool),
+    /// Put back the original brushes and layout and keep watching.
     Restore,
     /// Put back the original brushes and stop watching. The DLL stays
     /// loaded (XAML never frees it) but does nothing until attached again.
@@ -117,6 +121,7 @@ impl Command {
                 (usize::from(role.id()) << 8)
                     | opacity.map_or(OPACITY_ORIGINAL, |o| usize::from(o.percent())),
             ),
+            Self::SetLook(on) => (MSG_SET_LOOK, usize::from(on)),
             Self::Restore => (MSG_RESTORE, 0),
             Self::Detach => (MSG_DETACH, 0),
         }
@@ -140,6 +145,7 @@ impl Command {
                 };
                 Some(Self::SetTintOpacity(role, opacity))
             }
+            (MSG_SET_LOOK, w) if w <= 1 => Some(Self::SetLook(w == 1)),
             (MSG_RESTORE, 0) => Some(Self::Restore),
             (MSG_DETACH, 0) => Some(Self::Detach),
             _ => None,
@@ -165,6 +171,8 @@ mod tests {
             Command::SetTintOpacity(Role::Surface, Opacity::from_percent(0)),
             Command::SetTintOpacity(Role::Accent, Opacity::from_percent(100)),
             Command::SetTintOpacity(Role::Surface, None),
+            Command::SetLook(true),
+            Command::SetLook(false),
             Command::Restore,
             Command::Detach,
         ] {
@@ -189,6 +197,8 @@ mod tests {
         #[cfg(target_pointer_width = "64")]
         assert_eq!(Command::decode(set, 0x1_0112_3456), None);
         assert_eq!(Command::decode(restore, 1), None);
+        let (look, _) = Command::SetLook(true).encode();
+        assert_eq!(Command::decode(look, 2), None);
         assert_eq!(Command::decode(detach, 1), None);
         assert_eq!(Command::decode(WM_APP, 0), None);
         assert_eq!(Command::decode(0x0010, 0), None); // WM_CLOSE
@@ -219,7 +229,7 @@ mod tests {
 
     #[test]
     fn the_control_window_title_carries_the_version() {
-        assert_eq!(control_window_title(), "sepiida.hook.control v3");
+        assert_eq!(control_window_title(), "sepiida.hook.control v4");
     }
 
     #[test]

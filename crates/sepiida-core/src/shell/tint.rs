@@ -65,6 +65,21 @@ impl Opacity {
 /// above this. Tried by the user at 30 % on that machine.
 pub const MIN_TINT_OPACITY: f64 = 0.3;
 
+/// Tint opacity of an acrylic brush sepiida creates (look rules), when no
+/// opacity is asked for: the colour shows clearly and the blur still does.
+pub const OWN_ACRYLIC_OPACITY: f64 = 0.5;
+
+/// The tint of an acrylic brush sepiida creates: `color`, opaque, as tint
+/// and fallback, at `opacity` if given, else `OWN_ACRYLIC_OPACITY`.
+pub fn own_acrylic_tint(color: Color, opacity: Option<Opacity>) -> Tint {
+    let opaque = Argb::new(0xff, color.r, color.g, color.b);
+    Tint {
+        color: opaque,
+        opacity: opacity.map_or(OWN_ACRYLIC_OPACITY, Opacity::fraction),
+        fallback: Some(opaque),
+    }
+}
+
 /// A brush's tint: its colour and opacity, and its fallback colour if it
 /// could be read.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -354,5 +369,17 @@ mod tests {
     #[test]
     fn argb_prints_as_xaml_writes_it() {
         assert_eq!(Argb::new(0xff, 0x0a, 0xbc, 0xde).to_string(), "#FF0ABCDE");
+    }
+
+    #[test]
+    fn an_own_acrylic_brush_is_opaque_in_the_colour_at_the_asked_opacity() {
+        let color = Color::new(0x12, 0x34, 0x56);
+        let opaque = Argb::new(0xff, 0x12, 0x34, 0x56);
+        let tint = own_acrylic_tint(color, None);
+        assert_eq!(tint.color, opaque);
+        assert_eq!(tint.fallback, Some(opaque));
+        assert!((tint.opacity - OWN_ACRYLIC_OPACITY).abs() < 1e-9);
+        let tint = own_acrylic_tint(color, Opacity::from_percent(20));
+        assert!((tint.opacity - 0.2).abs() < 1e-9);
     }
 }

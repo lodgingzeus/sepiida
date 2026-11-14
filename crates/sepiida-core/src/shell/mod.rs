@@ -7,6 +7,8 @@ pub mod colors;
 pub mod crash_guard;
 pub mod finder;
 pub mod hosts;
+pub mod layout;
+pub mod measure;
 pub mod protocol;
 pub mod rules;
 pub mod tint;

@@ -62,12 +62,21 @@ fn shell_commands_parse() {
         parse(&["shell", "detach"]),
         Ok(Command::Shell(ShellCommand::Detach))
     );
+    assert_eq!(
+        parse(&["shell", "look", "on"]),
+        Ok(Command::Shell(ShellCommand::Look(true)))
+    );
+    assert_eq!(
+        parse(&["shell", "look", "off"]),
+        Ok(Command::Shell(ShellCommand::Look(false)))
+    );
     for (args, action) in [
         (&["shell", "dump"][..], DumpAction::Start { delay_secs: 0 }),
         (
             &["shell", "dump", "--delay", "10"],
             DumpAction::Start { delay_secs: 10 },
         ),
+        (&["shell", "dump", "taskbar"], DumpAction::Taskbar),
         (&["shell", "dump", "collect"], DumpAction::Collect),
         (&["shell", "dump", "stop"], DumpAction::Stop),
     ] {
@@ -85,6 +94,10 @@ fn shell_rejects_bad_arguments() {
         &["shell", "color", "#1a2b3c", "extra"],
         &["shell", "dump", "now"],
         &["shell", "dump", "collect", "extra"],
+        &["shell", "dump", "taskbar", "extra"],
+        &["shell", "look"],
+        &["shell", "look", "yes"],
+        &["shell", "look", "on", "extra"],
     ] {
         assert_eq!(parse(args), Err(CliError::ShellArguments), "{args:?}");
     }

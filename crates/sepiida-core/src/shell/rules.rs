@@ -1,9 +1,14 @@
 //! What the hook DLL styles, as data: which elements (type, `x:Name` and a
-//! required ancestor), which property, how, and which palette colour goes
-//! there. New surfaces are added as rules here rather than as code in the
-//! DLL. Each shell process has its own rule set (`rules_for`).
+//! required ancestor), which property, and what it gets: a palette colour,
+//! or a layout value while the look is on. New surfaces are added as rules
+//! here rather than as code in the DLL. Each shell process has its own rule
+//! set (`rules_for`).
 
-use super::hosts::Host;
+use super::{
+    hosts::Host,
+    layout::{Value, Visibility},
+    measure::bar_margin,
+};
 
 /// A palette colour sepiida.exe sends to the DLL. The DLL paints every
 /// target of a role with that role's colour.
@@ -44,8 +49,35 @@ pub enum Paint {
     LogOnly,
 }
 
+/// What a rule does to its property.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Effect {
+    /// The palette colour of `role`, applied the `paint` way. Always on
+    /// while styling.
+    Color { paint: Paint, role: Role },
+    /// A layout value, set only while the look is on and put back when it
+    /// is turned off.
+    Set(Value),
+    /// Changes nothing: logs the element's layout properties (size,
+    /// offset) whenever the look is switched, to learn the geometry a
+    /// look must fit. `property` is unused.
+    Probe,
+    /// Part of the taskbar's measured layout (`measure`), while the look
+    /// is on.
+    Measure(Part),
+}
+
+/// The elements the taskbar's measured layout reads or sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Part {
+    /// The glass bar behind the buttons: its `Margin` is computed.
+    Bar,
+    /// The tray panel: its `ActualWidth` is the tray's width.
+    Tray,
+}
+
 /// One kind of element to style.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rule {
     /// For logs, e.g. "taskbar background".
     pub label: &'static str,
@@ -56,10 +88,12 @@ pub struct Rule {
     /// The `x:Name` one of its ancestors must have; tells apart elements
     /// that share a type and name in different parts of the shell.
     pub ancestor: Option<&'static str>,
-    /// The property that receives the colour.
+    /// The `x:Name` its direct parent must have; for an element whose name
+    /// is common (`RootGrid`) and whose place is known exactly.
+    pub parent: Option<&'static str>,
+    /// The property the rule changes.
     pub property: &'static str,
-    pub paint: Paint,
-    pub role: Role,
+    pub effect: Effect,
 }
 
 impl Rule {
@@ -90,13 +124,136 @@ pub const TASKBAR_BACKGROUND: Rule = Rule {
     type_name: RECTANGLE_TYPE,
     name: "BackgroundFill",
     ancestor: Some(TASKBAR_FRAME_NAME),
+    parent: None,
     property: "Fill",
-    paint: Paint::Tint,
-    role: Role::Surface,
+    effect: Effect::Color {
+        paint: Paint::Tint,
+        role: Role::Surface,
+    },
 };
 
-/// Everything styled in Explorer's taskbar.
-pub const TASKBAR_RULES: &[Rule] = &[TASKBAR_BACKGROUND];
+/// Where a taskbar look rule's element is: type, `x:Name`, the name of a
+/// required ancestor and of a required direct parent.
+type Place = (
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+    Option<&'static str>,
+);
+
+/// A look rule on an element of the taskbar.
+const fn taskbar_look(
+    label: &'static str,
+    (type_name, name, ancestor, parent): Place,
+    property: &'static str,
+    value: Value,
+) -> Rule {
+    Rule {
+        label,
+        type_name,
+        name,
+        ancestor,
+        parent,
+        property,
+        effect: Effect::Set(value),
+    }
+}
+
+/// `Rectangle#BackgroundFill`, Windows' own taskbar background.
+const TASKBAR_FILL: Place = (
+    RECTANGLE_TYPE,
+    "BackgroundFill",
+    Some(TASKBAR_FRAME_NAME),
+    None,
+);
+/// `Rectangle#BackgroundStroke`, the line along the taskbar's top edge.
+const TASKBAR_STROKE: Place = (
+    RECTANGLE_TYPE,
+    "BackgroundStroke",
+    Some(TASKBAR_FRAME_NAME),
+    None,
+);
+/// The unnamed grid that holds the fill and the stroke
+/// (`TaskbarBackground#BackgroundControl > Grid`, build 26200). The hover
+/// flyout's background is named differently, so it is not selected.
+const TASKBAR_BACKGROUND_GRID: Place = (GRID_TYPE, "", None, Some("BackgroundControl"));
+/// `StackPanel#SystemTrayFrameGrid`: the tray icons and the clock (a
+/// StackPanel on build 26200).
+const TRAY: Place = (
+    "Windows.UI.Xaml.Controls.StackPanel",
+    "SystemTrayFrameGrid",
+    None,
+    None,
+);
+
+/// Space between the buttons and the edge of their pill, and between the
+/// pills and the screen edge or each other, in effective pixels.
+const PILL_SIDE: f32 = 8.0;
+/// Space above and below each pill.
+const PILL_INSET: f32 = 4.0;
+const PILL_CORNERS: Value = Value::CornerRadius([8.0; 4]);
+const COLLAPSED: Value = Value::Visibility(Visibility::Collapsed);
+const GLASS: Value = Value::Acrylic(Role::Surface);
+
+/// A rule that marks a taskbar element for the measured layout.
+const fn taskbar_measure(
+    label: &'static str,
+    place: Place,
+    property: &'static str,
+    part: Part,
+) -> Rule {
+    Rule {
+        effect: Effect::Measure(part),
+        ..taskbar_look(label, place, property, COLLAPSED)
+    }
+}
+
+/// The glass bar's margin for a tray panel `tray` wide: from the left
+/// edge to a gap before the tray's pill. `None` for a bad reading.
+pub fn taskbar_bar_margin(tray: f32) -> Option<Value> {
+    // The tray pill's own right margin is `PILL_SIDE`.
+    bar_margin(tray + PILL_SIDE, PILL_SIDE, PILL_INSET, PILL_SIDE).map(Value::Thickness)
+}
+
+/// Everything styled in Explorer's taskbar. The look (M5 step 3) is a
+/// segmented floating taskbar: Windows' background hidden; a glass bar of
+/// our acrylic behind the buttons, from the left edge to a gap before the
+/// tray (its end measured from the tray's width); the tray its own pill.
+/// Nothing Windows lays out is moved or narrowed: it sizes the buttons
+/// from where they sit, so the buttons stay as Windows places them.
+pub const TASKBAR_RULES: &[Rule] = &[
+    TASKBAR_BACKGROUND,
+    taskbar_look(
+        "Windows' taskbar background",
+        TASKBAR_FILL,
+        "Visibility",
+        COLLAPSED,
+    ),
+    taskbar_look("taskbar edge line", TASKBAR_STROKE, "Visibility", COLLAPSED),
+    taskbar_look("bar glass", TASKBAR_BACKGROUND_GRID, "Background", GLASS),
+    taskbar_look(
+        "bar corners",
+        TASKBAR_BACKGROUND_GRID,
+        "CornerRadius",
+        PILL_CORNERS,
+    ),
+    taskbar_measure("bar extent", TASKBAR_BACKGROUND_GRID, "Margin", Part::Bar),
+    taskbar_measure("tray width", TRAY, "", Part::Tray),
+    taskbar_look("tray pill glass", TRAY, "Background", GLASS),
+    taskbar_look("tray pill corners", TRAY, "CornerRadius", PILL_CORNERS),
+    taskbar_look(
+        "tray pill inset",
+        TRAY,
+        "Margin",
+        Value::Thickness([0.0, PILL_INSET, PILL_SIDE, PILL_INSET]),
+    ),
+    taskbar_look(
+        "tray pill padding",
+        TRAY,
+        "Padding",
+        Value::Thickness([PILL_SIDE / 2.0, 0.0, PILL_SIDE / 2.0, 0.0]),
+    ),
+];
 
 /// A surface background in a sandboxed host: tinted acrylic.
 const fn tinted(label: &'static str, type_name: &'static str, name: &'static str) -> Rule {
@@ -105,9 +262,12 @@ const fn tinted(label: &'static str, type_name: &'static str, name: &'static str
         type_name,
         name,
         ancestor: None,
+        parent: None,
         property: "Background",
-        paint: Paint::Tint,
-        role: Role::Surface,
+        effect: Effect::Color {
+            paint: Paint::Tint,
+            role: Role::Surface,
+        },
     }
 }
 
@@ -118,9 +278,12 @@ const fn overlay(label: &'static str, name: &'static str) -> Rule {
         type_name: BORDER_TYPE,
         name,
         ancestor: None,
+        parent: None,
         property: "Background",
-        paint: Paint::LogOnly,
-        role: Role::Surface,
+        effect: Effect::Color {
+            paint: Paint::LogOnly,
+            role: Role::Surface,
+        },
     }
 }
 
@@ -195,33 +358,54 @@ mod tests {
         assert!(!TASKBAR_BACKGROUND.selects(RECTANGLE_TYPE, "Other"));
     }
 
-    #[test]
-    fn every_host_has_rules_and_something_to_paint() {
-        for host in Host::ALL {
-            let rules = rules_for(host);
-            assert!(rules.iter().any(|r| r.paint != Paint::LogOnly), "{host:?}");
+    fn paint(rule: &Rule) -> Option<Paint> {
+        match rule.effect {
+            Effect::Color { paint, .. } => Some(paint),
+            Effect::Set(_) | Effect::Probe | Effect::Measure(_) => None,
         }
     }
 
     #[test]
-    fn every_surface_is_tinted_and_none_painted_solid() {
-        assert!(TASKBAR_RULES.iter().all(|r| r.paint == Paint::Tint));
+    fn every_host_has_rules_and_something_to_paint() {
         for host in Host::ALL {
+            let rules = rules_for(host);
             assert!(
-                rules_for(host).iter().all(|r| r.paint != Paint::Solid),
+                rules
+                    .iter()
+                    .any(|r| paint(r).is_some_and(|p| p != Paint::LogOnly)),
                 "{host:?}"
             );
         }
     }
 
     #[test]
-    fn no_two_rules_of_a_host_select_the_same_element() {
+    fn every_surface_is_tinted_and_none_painted_solid() {
+        assert!(
+            TASKBAR_RULES
+                .iter()
+                .filter_map(paint)
+                .all(|p| p == Paint::Tint)
+        );
+        for host in Host::ALL {
+            assert!(
+                rules_for(host)
+                    .iter()
+                    .all(|r| paint(r) != Some(Paint::Solid)),
+                "{host:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_two_rules_of_a_host_change_the_same_property_of_an_element() {
         for host in Host::ALL {
             let rules = rules_for(host);
             for (i, a) in rules.iter().enumerate() {
                 for b in &rules[i + 1..] {
                     assert!(
-                        !(a.type_name == b.type_name && a.name == b.name),
+                        !(a.type_name == b.type_name
+                            && a.name == b.name
+                            && a.property == b.property),
                         "{host:?}: {} and {}",
                         a.label,
                         b.label
@@ -229,5 +413,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn every_look_value_is_valid_and_the_taskbar_has_a_look() {
+        let mut looks = 0;
+        for host in Host::ALL {
+            for rule in rules_for(host) {
+                if let Effect::Set(value) = rule.effect {
+                    assert!(value.is_valid(), "{}", rule.label);
+                    looks += 1;
+                }
+            }
+        }
+        assert!(
+            TASKBAR_RULES
+                .iter()
+                .any(|r| matches!(r.effect, Effect::Set(_)))
+        );
+        assert!(looks > 0);
     }
 }
