@@ -27,7 +27,7 @@ use crate::{
     gui::tray,
     logging,
     paths::Paths,
-    win::{desktop, desktop_events, mode_watch, single_instance},
+    win::{desktop, desktop_events, flyout_events, mode_watch, single_instance},
 };
 
 use super::{
@@ -107,12 +107,12 @@ fn agent_loop(paths: Paths, receiver: &Receiver<Event>, events: Sender<Event>) -
     let mut engine = EngineWatch::start(paths.agent_state.clone(), events.clone());
     recheck_for_engine_later(events.clone());
     watch_system_mode(events.clone());
+    watch_flyouts(events.clone());
     // Theme from the current wallpaper straight away. `receiver` is alive,
     // so the send cannot fail.
     let _ = events.send(Event::ApplyNow);
-    drop(events);
 
-    let styling = ShellStyling::new(paths.config.clone());
+    let styling = ShellStyling::new(paths.config.clone(), events);
     let mut agent = Agent {
         paths,
         cache: None,
@@ -120,7 +120,7 @@ fn agent_loop(paths: Paths, receiver: &Receiver<Event>, events: Sender<Event>) -
     };
     let mut scheduler = Scheduler::new(SETTLE, MAX_DELAY);
     let result = run_loop(&mut agent, &mut scheduler, receiver, &mut engine);
-    // Taskbar styling does not outlive the agent.
+    // Shell styling does not outlive the agent.
     if agent.styling.enabled() {
         agent.styling.stop();
     }
@@ -140,8 +140,13 @@ fn run_loop(
         };
         match event {
             Ok(event) => {
-                if let Event::ExplorerRestarted(at) = event {
-                    agent.styling.explorer_restarted(at);
+                match event {
+                    Event::ExplorerRestarted(at) => agent.styling.explorer_restarted(at),
+                    Event::ShellHostExited(host, pid, at) => {
+                        agent.styling.host_exited(host, pid, at);
+                    }
+                    Event::ShellFlyoutShown(pid) => agent.styling.flyout_shown(pid),
+                    _ => {}
                 }
                 if scheduler.handle(event, Instant::now()) == Flow::Quit {
                     return Ok(());
@@ -203,6 +208,18 @@ fn explorer_restarted(events: &Sender<Event>) {
         if let Err(error) = spawned {
             warn!("could not schedule a look after the Explorer restart: {error}");
         }
+    }
+}
+
+/// The notification centre, calendar and toasts have XAML only while
+/// shown; the agent attaches to them when one of their windows appears.
+/// Without the hook they stay unstyled; nothing else depends on it.
+fn watch_flyouts(events: Sender<Event>) {
+    let watched = flyout_events::spawn(move |pid| {
+        let _ = events.send(Event::ShellFlyoutShown(pid));
+    });
+    if let Err(error) = watched {
+        warn!("{:#}", anyhow::Error::new(error));
     }
 }
 

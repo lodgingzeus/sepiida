@@ -1,28 +1,33 @@
 //! Shell styling driven by the agent: attaches the hook DLL to Explorer
-//! while the setting is on, sends it the palette's colours after every
-//! apply, and takes the styling down when the setting goes off or the agent
-//! quits. A crash guard turns the setting off if Explorer keeps dying soon
-//! after an attach.
+//! and the sandboxed hosts (`hosts`) while the setting is on, sends them
+//! the palette's colours after every apply, and takes the styling down
+//! when the setting goes off or the agent quits. Crash guards turn the
+//! setting off if Explorer or a host keeps dying soon after an attach.
 
 use std::{
     path::{Path, PathBuf},
+    sync::mpsc::Sender,
     thread,
     time::{Duration, Instant},
 };
 
 use sepiida_core::{
-    Palette,
+    Color, Palette,
     accent::ThemeMode,
     config::Config,
+    schedule::Event,
     shell::{
         attach_gate::{AttachGate, Decision},
         colors::role_colors,
         crash_guard::Verdict,
+        hosts::Host,
         protocol::Command,
+        rules::Role,
     },
 };
 use tracing::{error, info, warn};
 
+use super::hosts::HostStyling;
 use crate::win::{
     message_box,
     shell_hook::{self, Method, Outcome, Taskbar},
@@ -46,13 +51,15 @@ pub const RETRIES_AFTER_RESTART: [Duration; 5] = [
 pub struct ShellStyling {
     config_path: PathBuf,
     gate: AttachGate,
+    hosts: HostStyling,
 }
 
 impl ShellStyling {
-    pub fn new(config_path: PathBuf) -> Self {
+    pub fn new(config_path: PathBuf, events: Sender<Event>) -> Self {
         Self {
             config_path,
             gate: AttachGate::default(),
+            hosts: HostStyling::new(events),
         }
     }
 
@@ -63,17 +70,37 @@ impl ShellStyling {
     /// Called after every apply with the setting and the palette in effect.
     /// Never fails: problems are logged and the next apply tries again.
     pub fn sync(&mut self, enabled: bool, palette: &Palette) {
-        match self.gate.decide(enabled, Instant::now()) {
-            Decision::Stop => {
-                self.stop();
-                return;
-            }
-            Decision::Wait => {
-                info!("Explorer restarted moments ago; attaching on the next look");
-                return;
-            }
-            Decision::Go => {}
+        let decision = self.gate.decide(enabled, Instant::now());
+        if decision == Decision::Stop {
+            self.stop();
+            return;
         }
+        let system_dark = theme::system_mode() == ThemeMode::Dark;
+        let colors = role_colors(palette, system_dark);
+        if decision == Decision::Wait {
+            info!("Explorer restarted moments ago; attaching to it on the next look");
+        } else {
+            self.sync_taskbar(&colors, system_dark);
+        }
+        self.hosts.sync(&colors);
+    }
+
+    /// A ShellExperienceHost window appeared (process `pid`).
+    pub fn flyout_shown(&mut self, pid: u32) {
+        if self.gate.enabled() {
+            self.hosts.flyout_shown(pid);
+        }
+    }
+
+    /// A sandboxed host exited at `at`. Turns styling off after repeated
+    /// exits right after attaching.
+    pub fn host_exited(&mut self, host: Host, pid: u32, at: Instant) {
+        if let Some(crashes) = self.hosts.host_exited(host, pid, at) {
+            turn_off_after_crashes(&self.config_path, crashes, host.exe());
+        }
+    }
+
+    fn sync_taskbar(&mut self, colors: &[(Role, Color)], system_dark: bool) {
         let taskbar = match shell_hook::taskbar() {
             Ok(taskbar) => taskbar,
             Err(error) => {
@@ -84,8 +111,7 @@ impl ShellStyling {
         if !shell_hook::is_attached(taskbar.pid) && !self.attach(&taskbar) {
             return;
         }
-        let system_dark = theme::system_mode() == ThemeMode::Dark;
-        for (role, color) in role_colors(palette, system_dark) {
+        for &(role, color) in colors {
             if let Err(error) = shell_hook::send(taskbar.pid, Command::SetColor(role, color)) {
                 warn!("could not send the shell colours: {error}");
                 return;
@@ -152,29 +178,32 @@ impl ShellStyling {
     /// Turns styling off after repeated crashes right after attaching.
     pub fn explorer_restarted(&mut self, at: Instant) {
         if self.gate.explorer_restarted(at) == Verdict::Disable {
-            turn_off_after_crashes(&self.config_path, self.gate.crashes());
+            turn_off_after_crashes(&self.config_path, self.gate.crashes(), Host::Explorer.exe());
         }
     }
 
-    /// Restores and detaches every copy of the DLL in Explorer, if any.
+    /// Restores and detaches every copy of the DLL in Explorer and the
+    /// sandboxed hosts, if any.
     pub fn stop(&mut self) {
+        self.hosts.stop();
         let Ok(taskbar) = shell_hook::taskbar() else {
             return;
         };
         match shell_hook::detach_all(taskbar.pid) {
             Ok(0) => {}
-            Ok(windows) => info!(windows, "shell styling removed"),
-            Err(error) => warn!("could not remove the shell styling: {error}"),
+            Ok(windows) => info!(windows, "taskbar styling removed"),
+            Err(error) => warn!("could not remove the taskbar styling: {error}"),
         }
     }
 }
 
 /// Saves the setting as off (the agent's settings watcher then applies the
 /// change) and tells the user.
-fn turn_off_after_crashes(config_path: &Path, crashes: u32) {
+fn turn_off_after_crashes(config_path: &Path, crashes: u32, process: &'static str) {
     error!(
         crashes,
-        "Explorer restarted right after the styling DLL attached, again; turning shell styling off"
+        process,
+        "the process restarted right after the styling DLL attached, again; turning shell styling off"
     );
     match Config::load_or_default(config_path) {
         // A broken file is left for the user to fix, never overwritten
@@ -197,13 +226,13 @@ fn turn_off_after_crashes(config_path: &Path, crashes: u32) {
     // agent's.
     let spawned = thread::Builder::new()
         .name("crash-notice".to_owned())
-        .spawn(|| {
-            message_box::error(
-                "Explorer stopped twice right after sepiida restyled the taskbar, so \
-                 taskbar styling has been turned off.\n\nYou can turn it back on in \
+        .spawn(move || {
+            message_box::error(&format!(
+                "{process} stopped twice right after sepiida restyled it, so shell \
+                 styling has been turned off.\n\nYou can turn it back on in \
                  sepiida's settings. The details are in \
-                 %LOCALAPPDATA%\\sepiida\\logs\\hook.log.",
-            );
+                 %LOCALAPPDATA%\\sepiida\\logs\\hook.log."
+            ));
         });
     if let Err(error) = spawned {
         warn!("could not show the notice: {error}");

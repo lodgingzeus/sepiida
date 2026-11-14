@@ -26,7 +26,7 @@ apply options:
 wallpaper, and nothing is written for features that are turned off.
 
 shell commands (experimental; `run` does this by itself when \"Restyle the
-taskbar\" is on in the settings):
+taskbar, Start and flyouts\" is on in the settings):
   attach [--from N] [--remote]
                      load the styling DLL into Explorer, detaching any earlier
                      copy first; --from tries

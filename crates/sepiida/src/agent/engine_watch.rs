@@ -21,7 +21,7 @@ use sepiida_core::{
 use tracing::{info, warn};
 
 use super::watch::{FileWatcher, MissingFolder};
-use crate::win::wallpaper_engine;
+use crate::win::{processes, wallpaper_engine};
 
 /// Wallpaper Engine's settings are well under this; a larger file is
 /// treated as changed every time rather than read whole.
@@ -83,7 +83,7 @@ impl EngineWatch {
         if let Some(process_id) = actions.wait_for_exit {
             let events = self.events.clone();
             let running = Arc::clone(&self.running);
-            wallpaper_engine::wait_for_exit(process_id, move || {
+            processes::wait_for_exit(process_id, "wallpaper-engine-exit", move || {
                 running.store(false, Ordering::SeqCst);
                 info!(trigger = "Wallpaper Engine exited", "change noticed");
                 // In Auto mode the Windows wallpaper takes over.

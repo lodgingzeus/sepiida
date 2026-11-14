@@ -1,0 +1,165 @@
+//! Hears when ShellExperienceHost shows a window: the notification centre,
+//! the calendar or a toast. Their XAML exists only while shown, so the
+//! agent can attach the styling DLL only then.
+//!
+//! An out-of-context WinEvent hook for `EVENT_OBJECT_SHOW` on a thread of
+//! its own (the events arrive as messages on that thread; nothing is
+//! loaded into other processes). Every shown window in the session passes
+//! through the callback, so it filters cheaply: whole windows only, one
+//! process-name lookup per new process id (cached), and at most one report
+//! per second per process.
+
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
+
+use sepiida_core::shell::hosts::Host;
+use windows::Win32::{
+    Foundation::HWND,
+    UI::{
+        Accessibility::{HWINEVENTHOOK, SetWinEventHook},
+        WindowsAndMessaging::{
+            CHILDID_SELF, DispatchMessageW, EVENT_OBJECT_SHOW, GetMessageW,
+            GetWindowThreadProcessId, MSG, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT,
+            WINEVENT_SKIPOWNPROCESS,
+        },
+    },
+};
+
+use super::processes;
+
+/// Reports for one process closer together than this are dropped: a
+/// flyout shows several windows at once.
+const QUIET: Duration = Duration::from_secs(1);
+/// Process ids remembered; the cache is emptied when it grows past this.
+const MAX_KNOWN: usize = 512;
+
+#[derive(Debug, thiserror::Error)]
+pub enum FlyoutEventsError {
+    #[error("could not start the flyout event thread")]
+    Thread(#[source] std::io::Error),
+    #[error("could not install the window event hook")]
+    Hook,
+    #[error("the flyout event thread stopped before it was ready")]
+    Startup,
+}
+
+struct Watch {
+    on_shown: Box<dyn Fn(u32)>,
+    /// Whether each process id seen is ShellExperienceHost.
+    known: HashMap<u32, bool>,
+    last: Option<(u32, Instant)>,
+}
+
+thread_local! {
+    static WATCH: RefCell<Option<Watch>> = const { RefCell::new(None) };
+}
+
+/// Starts the hook thread; `on_shown` runs on it with the process id each
+/// time ShellExperienceHost shows a window. Returns once the hook is in.
+pub fn spawn(on_shown: impl Fn(u32) + Send + 'static) -> Result<(), FlyoutEventsError> {
+    let (ready_tx, ready_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("flyout-events".to_owned())
+        .spawn(move || {
+            WATCH.with(|cell| {
+                *cell.borrow_mut() = Some(Watch {
+                    on_shown: Box::new(on_shown),
+                    known: HashMap::new(),
+                    last: None,
+                });
+            });
+            // SAFETY: `on_event` lives for the whole program; the hook
+            // belongs to this thread, which runs a message loop below.
+            let hook = unsafe {
+                SetWinEventHook(
+                    EVENT_OBJECT_SHOW,
+                    EVENT_OBJECT_SHOW,
+                    None,
+                    Some(on_event),
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+                )
+            };
+            let ok = !hook.0.is_null();
+            let _ = ready_tx.send(ok);
+            if ok {
+                message_loop();
+            }
+        })
+        .map_err(FlyoutEventsError::Thread)?;
+    match ready_rx.recv() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(FlyoutEventsError::Hook),
+        Err(_) => Err(FlyoutEventsError::Startup),
+    }
+}
+
+fn message_loop() {
+    let mut message = MSG::default();
+    // SAFETY: `message` is a valid MSG for every call. GetMessageW returns
+    // 0 on WM_QUIT and -1 on error; both end the loop.
+    unsafe {
+        while GetMessageW(&mut message, None, 0, 0).0 > 0 {
+            DispatchMessageW(&message);
+        }
+    }
+}
+
+unsafe extern "system" fn on_event(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    window: HWND,
+    object: i32,
+    child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 || window.0.is_null() {
+        return;
+    }
+    // A panic must not unwind into user32.
+    let _ = std::panic::catch_unwind(|| {
+        let mut pid = 0;
+        // SAFETY: plain call; `pid` is writable.
+        unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+        if pid != 0 {
+            shown(pid);
+        }
+    });
+}
+
+fn shown(pid: u32) {
+    WATCH.with(|cell| {
+        let Ok(mut slot) = cell.try_borrow_mut() else {
+            return;
+        };
+        let Some(watch) = slot.as_mut() else {
+            return;
+        };
+        if watch.known.len() > MAX_KNOWN {
+            watch.known.clear();
+        }
+        let is_host = *watch.known.entry(pid).or_insert_with(|| {
+            processes::exe_name(pid)
+                .is_some_and(|name| name.eq_ignore_ascii_case(Host::ShellExperience.exe()))
+        });
+        if !is_host {
+            return;
+        }
+        let now = Instant::now();
+        if watch
+            .last
+            .is_some_and(|(last_pid, at)| last_pid == pid && now.duration_since(at) < QUIET)
+        {
+            return;
+        }
+        watch.last = Some((pid, now));
+        (watch.on_shown)(pid);
+    });
+}

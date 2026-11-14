@@ -4,6 +4,8 @@
 #[cfg(windows)]
 mod engine_watch;
 #[cfg(windows)]
+mod hosts;
+#[cfg(windows)]
 mod run;
 #[cfg(windows)]
 mod styling;

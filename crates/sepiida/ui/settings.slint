@@ -121,7 +121,7 @@ export component SettingsWindow inherits Window {
                     toggled => { root.lock-toggled(self.checked); }
                 }
                 Switch {
-                    text: "Restyle the taskbar (experimental)";
+                    text: "Restyle the taskbar, Start and flyouts (experimental)";
                     checked <=> root.shell-styling;
                     toggled => { root.shell-styling-toggled(self.checked); }
                 }

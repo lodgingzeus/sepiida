@@ -1,16 +1,23 @@
 //! Finds running processes by executable name in this user's session.
 
+use std::thread;
+
 use windows::Win32::{
-    Foundation::CloseHandle,
+    Foundation::{CloseHandle, HANDLE},
     System::{
         Diagnostics::ToolHelp::{
             CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
             TH32CS_SNAPPROCESS,
         },
         RemoteDesktop::ProcessIdToSessionId,
-        Threading::GetCurrentProcessId,
+        Threading::{
+            GetCurrentProcessId, INFINITE, OpenProcess, PROCESS_NAME_WIN32,
+            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+            WaitForSingleObject,
+        },
     },
 };
+use windows::core::PWSTR;
 
 /// A running process: its executable name as Windows reports it, and id.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +56,69 @@ pub fn find_in_session(names: &[&str]) -> windows::core::Result<Vec<Process>> {
         }
         let _ = CloseHandle(snapshot);
         Ok(found)
+    }
+}
+
+/// Calls `on_exit` from a background thread (named `thread_name`) once
+/// process `pid` has exited, or straight away if it is already gone. The
+/// thread only waits on the process handle; it never polls.
+pub fn wait_for_exit(pid: u32, thread_name: &str, on_exit: impl FnOnce() + Send + 'static) {
+    // SAFETY: no pointers are passed; SYNCHRONIZE is the only right needed
+    // to wait.
+    let Ok(process) = (unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }) else {
+        on_exit();
+        return;
+    };
+    let process = Owned(process);
+    let spawned = thread::Builder::new()
+        .name(thread_name.to_owned())
+        .spawn(move || {
+            // Move the whole guard in, so the handle is closed on this
+            // thread after the wait.
+            let process = process;
+            // SAFETY: the handle is valid until `process` drops after the
+            // wait returns.
+            unsafe { WaitForSingleObject(process.0, INFINITE) };
+            on_exit();
+        });
+    // Without the thread the exit goes unnoticed until the next apply;
+    // nothing else depends on it.
+    drop(spawned);
+}
+
+/// A process handle closed on drop.
+struct Owned(HANDLE);
+
+// SAFETY: a kernel object handle is valid in every thread of the process,
+// and the guard closes it exactly once, from whichever thread drops it.
+unsafe impl Send for Owned {}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        // SAFETY: the handle is valid and closed exactly once.
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// The executable file name of process `pid` (e.g. `explorer.exe`), or
+/// `None` if it cannot be opened (gone, or more privileged than us).
+pub fn exe_name(pid: u32) -> Option<String> {
+    // SAFETY: plain calls; the buffer is writable for `len` characters and
+    // the handle is closed below.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 1024];
+        let mut len = buffer.len() as u32;
+        let queried = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut len,
+        );
+        let _ = CloseHandle(process);
+        queried.ok()?;
+        let path = String::from_utf16_lossy(buffer.get(..len as usize)?);
+        path.rsplit('\\').next().map(str::to_owned)
     }
 }
 

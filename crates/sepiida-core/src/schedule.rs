@@ -9,6 +9,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::shell::hosts::Host;
+
 /// Something the agent was told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
@@ -19,6 +21,14 @@ pub enum Event {
     /// change. The time is taken when the message arrives, since the agent
     /// may be busy (attaching) when it handles the event.
     ExplorerRestarted(Instant),
+    /// A sandboxed shell host (this process id) exited at this time,
+    /// taking its styling along. For the agent's crash guard; not a change
+    /// by itself (later rechecks attach to the new process).
+    ShellHostExited(Host, u32, Instant),
+    /// A window of ShellExperienceHost (process id) appeared: a flyout
+    /// whose XAML only exists while shown, to attach to at once. Never
+    /// schedules an apply.
+    ShellFlyoutShown(u32),
     /// The user asked for an apply; skips the wait and ignores a pause.
     ApplyNow,
     Pause,
@@ -87,6 +97,7 @@ impl Scheduler {
                     self.schedule(now);
                 }
             }
+            Event::ShellHostExited(..) | Event::ShellFlyoutShown(_) => {}
             Event::Quit => return Flow::Quit,
         }
         Flow::Continue
@@ -158,6 +169,10 @@ mod tests {
     fn an_explorer_restart_schedules_like_a_change_and_respects_a_pause() {
         let mut s = Scheduler::new(SETTLE, MAX);
         let t0 = Instant::now();
+        // Handled by the agent loop itself; nothing to schedule.
+        s.handle(Event::ShellFlyoutShown(42), t0);
+        s.handle(Event::ShellHostExited(Host::StartMenu, 7, t0), t0);
+        assert_eq!(s.deadline(), None);
         s.handle(Event::ExplorerRestarted(t0), t0);
         assert_eq!(s.deadline(), Some(t0 + SETTLE));
         assert!(s.take_due(t0 + SETTLE));

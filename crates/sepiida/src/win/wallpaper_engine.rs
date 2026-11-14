@@ -6,7 +6,7 @@
 //! write to a pipe (see `sepiida_core::wallpaper_engine::config`), and reading a file
 //! means sepiida never starts another program.
 
-use std::{path::PathBuf, thread};
+use std::path::PathBuf;
 
 use sepiida_core::{
     source::{Absence, Showing, SourceError, WallpaperSource},
@@ -23,8 +23,8 @@ use windows::{
                 TH32CS_SNAPPROCESS,
             },
             Threading::{
-                INFINITE, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-                PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, WaitForSingleObject,
+                OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+                QueryFullProcessImageNameW,
             },
         },
     },
@@ -75,33 +75,6 @@ pub fn running() -> Result<Option<Observed>, SourceError> {
             folder: executable.parent()?.to_owned(),
         })
     }))
-}
-
-/// Calls `on_exit` from a background thread once the process has exited,
-/// or straight away if it is already gone. The thread only waits on the
-/// process handle; it never polls.
-pub fn wait_for_exit(process_id: u32, on_exit: impl FnOnce() + Send + 'static) {
-    // SAFETY: no pointers are passed; the handle is owned by the guard.
-    // SYNCHRONIZE is the only right needed to wait.
-    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, process_id) }.map(OwnedHandle);
-    let Ok(process) = process else {
-        on_exit();
-        return;
-    };
-    let spawned = thread::Builder::new()
-        .name("wallpaper-engine-exit".to_owned())
-        .spawn(move || {
-            // Move the whole guard in, not just the handle field, so the
-            // handle is closed on this thread after the wait.
-            let process = process;
-            // SAFETY: the handle is valid until `process` drops after the
-            // wait returns.
-            unsafe { WaitForSingleObject(process.0, INFINITE) };
-            on_exit();
-        });
-    // Without the thread the exit goes unnoticed until the next apply;
-    // nothing else depends on it.
-    drop(spawned);
 }
 
 /// Process id and full path of the running Wallpaper Engine, or `None` when

@@ -4,6 +4,7 @@
 pub mod desktop;
 pub mod desktop_events;
 pub mod file_access;
+pub mod flyout_events;
 pub mod message_box;
 pub mod mode_watch;
 pub mod modules;
