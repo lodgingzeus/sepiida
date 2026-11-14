@@ -8,4 +8,5 @@ pub mod finder;
 pub mod hosts;
 pub mod protocol;
 pub mod rules;
+pub mod tint;
 pub mod tree;

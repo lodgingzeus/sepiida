@@ -18,6 +18,53 @@ pub const SANDBOXED_HOSTS: [&str; 3] = [
     "ShellHost.exe",
 ];
 
+/// A shell process the DLL styles. Each has its own rule set
+/// (`rules::rules_for`), chosen by the DLL from its own executable name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Host {
+    /// explorer.exe: the taskbar.
+    Explorer,
+    /// The Start menu.
+    StartMenu,
+    /// Quick settings and the media controls (Windows 11 24H2).
+    ShellHost,
+    /// The notification centre, the calendar and toasts.
+    ShellExperience,
+}
+
+impl Host {
+    pub const ALL: [Self; 4] = [
+        Self::Explorer,
+        Self::StartMenu,
+        Self::ShellHost,
+        Self::ShellExperience,
+    ];
+
+    /// The executable's file name.
+    pub const fn exe(self) -> &'static str {
+        match self {
+            Self::Explorer => "explorer.exe",
+            Self::StartMenu => SANDBOXED_HOSTS[0],
+            Self::ShellExperience => SANDBOXED_HOSTS[1],
+            Self::ShellHost => SANDBOXED_HOSTS[2],
+        }
+    }
+
+    /// The host an executable file name belongs to (case-insensitive, as
+    /// Windows file names are).
+    pub fn from_exe(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|host| host.exe().eq_ignore_ascii_case(name))
+    }
+
+    /// Whether the host runs sandboxed (AppContainer): our `Local\` events
+    /// do not reach it, and the DLL file must be readable by app packages.
+    pub const fn is_sandboxed(self) -> bool {
+        !matches!(self, Self::Explorer)
+    }
+}
+
 /// Elements the dump logs per attachment. A Start menu holds a few
 /// thousand; the cap bounds the log if a tree keeps changing.
 pub const MAX_DUMPED_ELEMENTS: usize = 20_000;
@@ -141,6 +188,26 @@ mod tests {
             &"a".repeat(MAX_PACKAGE_FAMILY_NAME + 1),
         ] {
             assert!(!is_package_family_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn hosts_are_found_by_exe_name_without_case() {
+        for host in Host::ALL {
+            assert_eq!(Host::from_exe(host.exe()), Some(host));
+            assert_eq!(Host::from_exe(&host.exe().to_uppercase()), Some(host));
+            assert_eq!(host.is_sandboxed(), is_sandboxed_host(host.exe()));
+        }
+        assert_eq!(Host::from_exe("ShellHost.exe"), Some(Host::ShellHost));
+        assert_eq!(Host::from_exe("explorer"), None);
+        assert_eq!(Host::from_exe("sepiida_hook-1234.exe"), None);
+        assert_eq!(Host::from_exe(""), None);
+    }
+
+    #[test]
+    fn every_sandboxed_host_is_a_host() {
+        for exe in SANDBOXED_HOSTS {
+            assert!(Host::from_exe(exe).is_some_and(Host::is_sandboxed), "{exe}");
         }
     }
 

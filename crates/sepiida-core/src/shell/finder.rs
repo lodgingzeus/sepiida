@@ -166,7 +166,7 @@ impl Finder {
 mod tests {
     use super::*;
     use crate::shell::rules::{
-        RECTANGLE_TYPE, Role, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME, TASKBAR_RULES,
+        Paint, RECTANGLE_TYPE, Role, TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME, TASKBAR_RULES,
     };
 
     const GRID: &str = "Windows.UI.Xaml.Controls.Grid";
@@ -308,6 +308,7 @@ mod tests {
             name: "Acrylic",
             ancestor: None,
             property: "Background",
+            paint: Paint::Tint,
             role: Role::Accent,
         },
     ];
