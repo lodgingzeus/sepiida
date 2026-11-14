@@ -3,7 +3,10 @@
 //! elements, and commands arrive on the same thread through the control
 //! window, so all of this state is thread-local and needs no locking.
 
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    time::{Duration, Instant},
+};
 
 use sepiida_core::shell::{
     attach_request::AttachRequest, finder::Finder, hosts::AttachMode, protocol::Command,
@@ -25,10 +28,14 @@ use crate::{
     },
 };
 
+/// Shortest time between two checks for swapped brushes on tree activity.
+const RECHECK_EVERY: Duration = Duration::from_millis(250);
+
 struct UiState {
     generation: u64,
     finder: Finder,
     styler: Styler,
+    last_recheck: Option<Instant>,
 }
 
 impl UiState {
@@ -146,6 +153,7 @@ fn on_change(
                 generation: watcher.generation,
                 finder: Finder::new(rules),
                 styler: Styler::new(watcher.diagnostics.clone(), watcher.service.clone()),
+                last_recheck: None,
             });
             if let Some(state) = slot.as_mut() {
                 // Kept until targets appear (no target exists yet).
@@ -187,6 +195,14 @@ fn on_change(
             if let Some(rule) = state.finder.rule(found.rule) {
                 state.styler.found(found, rule);
             }
+        }
+        let now = Instant::now();
+        if state
+            .last_recheck
+            .is_none_or(|at| now.duration_since(at) >= RECHECK_EVERY)
+        {
+            state.last_recheck = Some(now);
+            state.styler.recheck_tints();
         }
     });
 }

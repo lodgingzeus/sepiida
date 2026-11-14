@@ -35,6 +35,10 @@ struct Target {
     /// `Some(None)` if the property had no value.
     original: Option<Option<Original>>,
     styled: bool,
+    /// Tint paint only: the value last handled on this element (tinted, or
+    /// left alone as not acrylic). Windows swaps in another brush on a
+    /// light/dark switch; a different value means it needs our tint.
+    tinted: Option<InstanceHandle>,
 }
 
 struct Original {
@@ -94,6 +98,7 @@ impl Styler {
                 role: rule.role,
                 original: None,
                 styled: false,
+                tinted: None,
             },
         );
         match rule.paint {
@@ -234,6 +239,39 @@ impl Styler {
         };
         let opacity = self.opacities.get(&role).copied();
         self.tints.apply(&self.xaml, value, color, opacity);
+        // Recorded even if the value refused the tint (not acrylic), so
+        // the re-check does not retry it on every tree change.
+        if let Some(target) = self.targets.get_mut(&found) {
+            target.tinted = Some(value);
+        }
+    }
+
+    /// Tints every tinted target whose brush changed since it was last
+    /// tinted (or that had none then). Cheap: one property read per
+    /// target. Called on tree activity, which comes with a surface
+    /// opening, so a brush Windows swapped in while it was hidden gets
+    /// our colour as it shows.
+    pub fn recheck_tints(&mut self) {
+        let stale: Vec<Match> = self
+            .targets
+            .iter()
+            .filter(|(_, t)| t.paint == Paint::Tint && self.colors.contains_key(&t.role))
+            .filter(|(found, t)| {
+                let now = self.xaml.property(found.handle, t.property_index);
+                now.is_some() && now != t.tinted
+            })
+            .map(|(&found, _)| found)
+            .collect();
+        for found in stale {
+            if let Some(target) = self.targets.get(&found) {
+                log!(
+                    "{} {:#x} has a new brush; tinting it",
+                    target.label,
+                    found.handle
+                );
+            }
+            self.tint(found);
+        }
     }
 
     fn paint(&mut self, found: Match) {

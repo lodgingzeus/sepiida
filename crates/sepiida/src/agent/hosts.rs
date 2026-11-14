@@ -162,9 +162,10 @@ impl HostStyling {
                     thread::sleep(at.saturating_sub(waited));
                     waited = at;
                     for &(role, color) in &colors {
-                        if let Err(error) = shell_hook::send(pid, Command::SetColor(role, color)) {
-                            warn!(pid, "could not send the shell colours again: {error}");
-                            return;
+                        // No control window yet (still opening) or gone:
+                        // skip this round, the next may find one.
+                        if shell_hook::send(pid, Command::SetColor(role, color)).is_err() {
+                            break;
                         }
                     }
                 }

@@ -162,6 +162,31 @@ fn a_tint_windows_changed_is_the_one_restored() {
 }
 
 #[test]
+fn a_brush_windows_swaps_in_later_is_tinted_on_tree_activity() {
+    let _serial = serial();
+    // Before the switch the surface holds a brush we cannot tint.
+    let (shared, callback) = attach_as(Host::StartMenu, ORIGINAL_FILL);
+    add(&callback, START_BACKGROUND, 0, BORDER_TYPE, "AcrylicBorder");
+    send(Command::SetColor(
+        Role::Surface,
+        Color::new(0x33, 0x66, 0x99),
+    ));
+    assert!(!shared.calls().iter().any(|c| c.starts_with("put_Tint")));
+
+    // Windows swaps in its acrylic brush (a light/dark switch while
+    // hidden); the surface opens and the tree changes.
+    shared
+        .values
+        .lock()
+        .unwrap()
+        .insert((START_BACKGROUND, BACKGROUND_INDEX), ACRYLIC);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    add(&callback, 30, START_BACKGROUND, GRID_TYPE, "");
+    assert!(shared.has("put_TintColor #CC336699"));
+    detach(&shared);
+}
+
+#[test]
 fn a_value_that_is_not_acrylic_is_left_alone() {
     let _serial = serial();
     // The original fill stands in for any brush that is not acrylic.
