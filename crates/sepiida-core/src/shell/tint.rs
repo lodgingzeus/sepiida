@@ -58,6 +58,13 @@ impl Opacity {
     }
 }
 
+/// The least tint opacity used when none is asked for. Windows 11 gives
+/// the shell's light-mode acrylic a `TintOpacity` of 0 (seen on real
+/// hardware, 2026-11-14: colour only through the luminosity layer), so a
+/// tint at Windows' own opacity would not show at all. Dark mode uses 0.5,
+/// above this. Tried by the user at 30 % on that machine.
+pub const MIN_TINT_OPACITY: f64 = 0.3;
+
 /// A brush's tint: its colour and opacity, and its fallback colour if it
 /// could be read.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -116,13 +123,23 @@ impl BrushTint {
 
     /// The tint for `color`: tint and fallback in our colour with the
     /// originals' alpha (opaque if that was zero, which would hide it), at
-    /// `opacity` if given, else at the original opacity.
+    /// `opacity` if given, else at the original opacity but at least
+    /// `MIN_TINT_OPACITY`.
     pub fn target(&self, color: Color, opacity: Option<Opacity>) -> Tint {
         Tint {
             color: recolor(self.original.color, color),
-            opacity: opacity.map_or(self.original.opacity, Opacity::fraction),
+            opacity: opacity.map_or(
+                self.original.opacity.max(MIN_TINT_OPACITY),
+                Opacity::fraction,
+            ),
             fallback: self.original.fallback.map(|f| recolor(f, color)),
         }
+    }
+
+    /// Whether the brush, holding `current`, already holds `target` as we
+    /// set it: writing it again would change nothing.
+    pub fn already_holds(&self, target: Tint, current: Tint) -> bool {
+        self.applied.is_some_and(|applied| applied.same(target)) && current.same(target)
     }
 
     /// Records that `tint` is now on the brush.
@@ -207,6 +224,33 @@ mod tests {
         assert_eq!(tint.opacity, 0.5);
         let tint = brush.target(BLUE, Opacity::from_percent(80));
         assert_eq!(tint.opacity, 0.8);
+    }
+
+    #[test]
+    fn a_tint_windows_hides_at_zero_opacity_gets_the_least_opacity() {
+        let light = BrushTint::new(Tint {
+            opacity: 0.0,
+            ..WINDOWS
+        });
+        assert_eq!(light.target(BLUE, None).opacity, MIN_TINT_OPACITY);
+        // An opacity asked for wins, even below the least one.
+        let asked = light.target(BLUE, Opacity::from_percent(10));
+        assert_eq!(asked.opacity, 0.1);
+        // The original stays what Windows had, for the restore.
+        assert_eq!(light.original().opacity, 0.0);
+    }
+
+    #[test]
+    fn a_brush_already_holding_our_tint_needs_no_write() {
+        let mut brush = BrushTint::new(WINDOWS);
+        let ours = brush.target(BLUE, None);
+        assert!(!brush.already_holds(ours, WINDOWS));
+        brush.applied(ours);
+        assert!(brush.already_holds(ours, ours));
+        let other = brush.target(Color::new(1, 2, 3), None);
+        assert!(!brush.already_holds(other, ours));
+        // Windows put its own tint back: write again.
+        assert!(!brush.already_holds(ours, WINDOWS));
     }
 
     #[test]

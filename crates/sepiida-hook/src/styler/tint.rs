@@ -164,6 +164,10 @@ impl Tints {
             );
         }
         let target = tinted.state.target(color, opacity);
+        if tinted.state.already_holds(target, current) {
+            // Re-sends after a surface opens repeat the same colour.
+            return true;
+        }
         if !write_tint(&tinted.brush, target) {
             return false;
         }
