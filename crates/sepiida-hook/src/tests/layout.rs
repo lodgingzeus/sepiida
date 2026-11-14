@@ -8,7 +8,7 @@ use sepiida_core::{
     shell::{
         layout::{Value, Visibility},
         protocol::Command,
-        rules::{Effect, RECTANGLE_TYPE, Role, Rule, TASKBAR_FRAME_NAME},
+        rules::{Effect, Name, RECTANGLE_TYPE, Role, Rule, TASKBAR_FRAME_NAME},
     },
 };
 
@@ -18,9 +18,10 @@ const fn look(property: &'static str, value: Value) -> Rule {
     Rule {
         label: "look",
         type_name: RECTANGLE_TYPE,
-        name: "BackgroundFill",
+        name: Name::Is("BackgroundFill"),
         ancestor: Some(TASKBAR_FRAME_NAME),
         parent: None,
+        chain: &[],
         property,
         effect: Effect::Set(value),
     }

@@ -316,3 +316,66 @@ mod tests {
         assert_eq!(bstr_arg(&text), text.as_ptr());
     }
 }
+
+/// `Windows.UI.Xaml.Markup.IXamlReaderStatics`, from the SDK's
+/// `winrt/windows.ui.xaml.markup.h`. As above, the first three slots are
+/// `IInspectable`'s. `xaml` is an `HSTRING` the callee only borrows.
+#[interface("9891c6bd-534f-4955-b85a-8a8dc0dca602")]
+pub unsafe trait IXamlReaderStatics: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn Load(&self, xaml: *mut c_void, result: *mut *mut c_void) -> HRESULT;
+    pub fn LoadWithInitialTemplateValidation(
+        &self,
+        xaml: *mut c_void,
+        result: *mut *mut c_void,
+    ) -> HRESULT;
+}
+
+/// `Windows.UI.Xaml.Media.IXamlCompositionBrushBaseFactory`, from the SDK's
+/// `winrt/windows.ui.xaml.media.h`. `CreateInstance` composes a new brush
+/// with `outer` as its controlling object and returns the inner
+/// (non-delegating) object in `inner`.
+#[interface("394f0823-2451-4ed8-bd24-488149b3428d")]
+pub unsafe trait IXamlCompositionBrushBaseFactory: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn CreateInstance(
+        &self,
+        outer: *mut c_void,
+        inner: *mut *mut c_void,
+        value: *mut *mut c_void,
+    ) -> HRESULT;
+}
+
+/// `Windows.UI.Xaml.Media.IXamlCompositionBrushBaseOverrides`: what a
+/// derived brush implements (`OnConnected`, `OnDisconnected`).
+pub const IID_XAML_COMPOSITION_BRUSH_BASE_OVERRIDES: GUID =
+    GUID::from_u128(0xd19127f1_38b4_4ea1_8f33_849629a4c9c1);
+
+/// `Windows.UI.Xaml.Media.IXamlCompositionBrushBaseProtected`: the
+/// composition brush a derived brush hands to XAML.
+#[interface("1513f3d8-0457-4e1c-ad77-11c1d9879743")]
+pub unsafe trait IXamlCompositionBrushBaseProtected: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn get_CompositionBrush(&self, value: *mut *mut c_void) -> HRESULT;
+    pub fn put_CompositionBrush(&self, value: *mut c_void) -> HRESULT;
+}
+
+/// `Windows.UI.Xaml.IUIElement`, only to pass an element to
+/// `ElementCompositionPreview`.
+pub const IID_UI_ELEMENT: GUID = GUID::from_u128(0x676d0be9_b65c_41c6_ba40_58cf87f201c1);
+
+/// `Windows.UI.Xaml.Hosting.IElementCompositionPreviewStatics`, from the
+/// SDK's `winrt/windows.ui.xaml.hosting.h`.
+#[interface("08c92b38-ec99-4c55-bc85-a1c180b27646")]
+pub unsafe trait IElementCompositionPreviewStatics: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn GetElementVisual(&self, element: *mut c_void, visual: *mut *mut c_void) -> HRESULT;
+}

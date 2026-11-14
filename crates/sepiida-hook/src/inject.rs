@@ -9,7 +9,7 @@
 //!
 //! Two ways to reach it, both exported for sepiida.exe:
 //! - Cross-process: sepiida.exe loads this DLL into itself and calls
-//!   [`SepiidaAttachWithColors`] with Explorer's pid.
+//!   [`SepiidaAttachWithRoles`] with Explorer's pid.
 //! - In-process (TranslucentTB's current method): sepiida.exe installs
 //!   [`SepiidaCallWndProc`] as a `WH_CALLWNDPROC` hook on the taskbar's
 //!   thread only, which maps this DLL into Explorer, and sends the taskbar
@@ -24,7 +24,7 @@ use std::{
 };
 
 use sepiida_core::shell::{
-    attach_request::AttachRequest,
+    attach_request::{AttachRequest, ExportColors},
     hosts::AttachMode,
     protocol::{ALONGSIDE_SPAN, ATTACH_MESSAGE, MAX_CONNECTION, TAP_CLSID, connection_names},
 };
@@ -146,26 +146,36 @@ fn call_on_fresh_thread(
 }
 
 /// Cross-process attach, called by sepiida.exe after loading this DLL into
-/// itself. `mode` is an `AttachMode` id; `surface` and `accent` are the
-/// colours to start with, encoded as `AttachRequest::export_colors`.
+/// itself. `mode` is an `AttachMode` id; `colors` points at `count`
+/// colours to start with, one per role, encoded as
+/// `AttachRequest::export_colors`. Any other `count` is refused.
 ///
 /// # Safety
+/// `colors` must be null or point at `count` readable values;
 /// `connection` must be null or writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn SepiidaAttachWithColors(
+pub unsafe extern "system" fn SepiidaAttachWithRoles(
     pid: u32,
     from: u32,
     mode: u32,
-    surface: u32,
-    accent: u32,
+    colors: *const u32,
+    count: u32,
     connection: *mut u32,
 ) -> HRESULT {
-    guard("SepiidaAttachWithColors", E_UNEXPECTED, || {
-        if connection.is_null() {
+    guard("SepiidaAttachWithRoles", E_UNEXPECTED, || {
+        if connection.is_null() || colors.is_null() {
             return E_POINTER;
         }
-        let Some(request) = AttachMode::from_id(mode)
-            .and_then(|mode| AttachRequest::from_export(mode, [surface, accent]))
+        let mut values: ExportColors = Default::default();
+        let len = values.len();
+        if usize::try_from(count).ok() != Some(len) {
+            return E_INVALIDARG;
+        }
+        // SAFETY: non-null, and the caller vouches for `count` values,
+        // which was just checked to be `len`.
+        values.copy_from_slice(unsafe { std::slice::from_raw_parts(colors, len) });
+        let Some(request) =
+            AttachMode::from_id(mode).and_then(|mode| AttachRequest::from_export(mode, values))
         else {
             return E_INVALIDARG;
         };

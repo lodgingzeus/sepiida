@@ -81,7 +81,49 @@ pub enum Value {
     /// A new acrylic brush, made by the DLL and tinted with the role's
     /// colour: `Background` or `Fill` of a surface the look adds.
     Acrylic(Role),
+    /// A transparent brush, made by the DLL: `Background` of a layer that
+    /// would cover the surface's glass. A local original is held and put
+    /// back.
+    Transparent,
+    /// A value as XAML markup writes it (`8`, `0,4,0,4`, `Center`), made
+    /// by XAML from the string and the property's type. From Windhawk
+    /// theme lines; never XAML markup itself (`is_valid`).
+    Text(&'static str),
+    /// A XAML object from a theme line (`:=<SolidColorBrush … />`), loaded
+    /// by the DLL with `XamlReader` (`markup`). A local original is held
+    /// and put back.
+    Xaml(&'static str),
+    /// A blur of what lies behind, with a flood of the role's colour at
+    /// `opacity` over it (Windhawk's `WindhawkBlur`, from TranslucentTB),
+    /// made by the DLL. A local original is held and put back.
+    Blur {
+        amount: f32,
+        role: Role,
+        opacity: f32,
+    },
 }
+
+/// Strongest blur accepted (Gaussian standard deviation, in pixels).
+pub const MAX_BLUR: f32 = 250.0;
+
+/// Longest text value accepted.
+pub const MAX_TEXT: usize = 64;
+
+/// Property types whose chain string is the value itself, so a local one
+/// can be made again from it. Any other local value (a brush) is held.
+const VALUE_TYPES: [&str; 11] = [
+    ".Thickness",
+    ".CornerRadius",
+    ".Double",
+    ".Single",
+    ".Int32",
+    ".Boolean",
+    ".Visibility",
+    ".HorizontalAlignment",
+    ".VerticalAlignment",
+    ".TextAlignment",
+    ".Orientation",
+];
 
 impl Value {
     /// The last part of the type name XAML's property chain reports for a
@@ -95,7 +137,9 @@ impl Value {
             Self::Length(_) | Self::Auto => ".Double",
             Self::HorizontalAlignment(_) => ".HorizontalAlignment",
             Self::Visibility(_) => ".Visibility",
-            Self::Acrylic(_) => ".Brush",
+            Self::Acrylic(_) | Self::Transparent | Self::Blur { .. } => ".Brush",
+            // Any type: XAML says whether the string fits.
+            Self::Text(_) | Self::Xaml(_) => "",
         }
     }
 
@@ -107,9 +151,22 @@ impl Value {
             Self::Thickness(sides) => sides.into_iter().all(fits),
             Self::CornerRadius(sides) => sides.into_iter().all(|n| fits(n) && n >= 0.0),
             Self::Length(n) => fits(n) && n >= 0.0,
-            Self::Auto | Self::HorizontalAlignment(_) | Self::Visibility(_) | Self::Acrylic(_) => {
-                true
+            Self::Auto
+            | Self::HorizontalAlignment(_)
+            | Self::Visibility(_)
+            | Self::Acrylic(_)
+            | Self::Transparent => true,
+            Self::Text(text) => {
+                !text.is_empty()
+                    && text.len() <= MAX_TEXT
+                    && !text
+                        .chars()
+                        .any(|c| c.is_control() || matches!(c, '<' | '>' | '{' | '}'))
             }
+            Self::Xaml(text) => super::markup::is_safe(text),
+            Self::Blur {
+                amount, opacity, ..
+            } => (0.0..=MAX_BLUR).contains(&amount) && (0.0..=1.0).contains(&opacity),
         }
     }
 
@@ -125,8 +182,9 @@ impl Value {
             // XAML markup writes "Auto"; whether `CreateInstance` takes it
             // or only NaN is not documented.
             Self::Auto => vec!["Auto".to_owned(), "NaN".to_owned()],
-            // Not made from a string (`Make::Acrylic`).
-            Self::Acrylic(_) => Vec::new(),
+            // Not made from a string (`Make::Acrylic`, `Make::Transparent`).
+            Self::Acrylic(_) | Self::Transparent | Self::Xaml(_) | Self::Blur { .. } => Vec::new(),
+            Self::Text(text) => vec![text.to_owned()],
         }
     }
 }
@@ -138,6 +196,14 @@ impl fmt::Display for Value {
             Self::HorizontalAlignment(a) => f.write_str(a.name()),
             Self::Auto => f.write_str("Auto"),
             Self::Acrylic(role) => write!(f, "acrylic in the {role:?} colour"),
+            Self::Transparent => f.write_str("transparent"),
+            Self::Text(text) => f.write_str(text),
+            Self::Xaml(text) => write!(f, "XAML {text}"),
+            Self::Blur {
+                amount,
+                role,
+                opacity,
+            } => write!(f, "blur {amount} with the {role:?} colour at {opacity}"),
             _ => f.write_str(&self.candidates().concat()),
         }
     }
@@ -213,7 +279,7 @@ pub enum Restore {
 }
 
 /// How the DLL makes the value it writes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Make {
     /// `CreateInstance` with the property's type name, as the chain
     /// reports it, and each value string in turn, best first.
@@ -223,10 +289,20 @@ pub enum Make {
     },
     /// The DLL's own acrylic brush for the role.
     Acrylic(Role),
+    /// The DLL's transparent brush.
+    Transparent,
+    /// `XamlReader.Load` of this document (`markup::document`).
+    Xaml(String),
+    /// The DLL's blur brush.
+    Blur {
+        amount: f32,
+        role: Role,
+        opacity: f32,
+    },
 }
 
 /// How to write a look rule's value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Write {
     pub make: Make,
     pub restore: Restore,
@@ -284,7 +360,22 @@ pub fn plan_write(value: &Value, current: &Current<'_>) -> Result<Write, Skip> {
         ValueSource::Local if matches!(value, Value::Acrylic(_)) => {
             return Err(Skip::LocalObject);
         }
-        ValueSource::Local if current.value.is_empty() => Restore::Hold,
+        // A brush's chain string is not the brush: hold the object.
+        ValueSource::Local
+            if current.value.is_empty()
+                || matches!(
+                    value,
+                    Value::Transparent | Value::Xaml(_) | Value::Blur { .. }
+                ) =>
+        {
+            Restore::Hold
+        }
+        ValueSource::Local
+            if matches!(value, Value::Text(_))
+                && !VALUE_TYPES.iter().any(|t| current.type_name.ends_with(t)) =>
+        {
+            Restore::Hold
+        }
         ValueSource::Local => Restore::Recreate {
             type_name: current.type_name.to_owned(),
             value: current.value.to_owned(),
@@ -293,12 +384,48 @@ pub fn plan_write(value: &Value, current: &Current<'_>) -> Result<Write, Skip> {
     };
     let make = match *value {
         Value::Acrylic(role) => Make::Acrylic(role),
+        Value::Transparent => Make::Transparent,
+        Value::Blur {
+            amount,
+            role,
+            opacity,
+        } => Make::Blur {
+            amount,
+            role,
+            opacity,
+        },
+        Value::Xaml(text) => Make::Xaml(super::markup::document(text).ok_or(Skip::Invalid)?),
+        Value::Text(text) => Make::Parse {
+            type_name: current.type_name.to_owned(),
+            candidates: text_candidates(text, current.type_name),
+        },
         _ => Make::Parse {
             type_name: current.type_name.to_owned(),
             candidates: value.candidates(),
         },
     };
     Ok(Write { make, restore })
+}
+
+/// The strings to try for a text value: for a thickness or corner radius
+/// written short (`8`, `4,8`), the four-number form first, which
+/// `CreateInstance` is known to take, then the text as written.
+fn text_candidates(text: &str, type_name: &str) -> Vec<String> {
+    let parts: Vec<&str> = text.split(',').map(str::trim).collect();
+    let numbers = parts.iter().all(|p| p.parse::<f32>().is_ok());
+    let full = match parts.as_slice() {
+        [all]
+            if numbers
+                && (type_name.ends_with(".Thickness") || type_name.ends_with(".CornerRadius")) =>
+        {
+            Some(format!("{all},{all},{all},{all}"))
+        }
+        [x, y] if numbers && type_name.ends_with(".Thickness") => Some(format!("{x},{y},{x},{y}")),
+        _ => None,
+    };
+    full.into_iter()
+        .chain(std::iter::once(text.to_owned()))
+        .collect()
 }
 
 #[cfg(test)]

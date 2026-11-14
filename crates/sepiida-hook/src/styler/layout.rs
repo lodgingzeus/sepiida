@@ -21,7 +21,10 @@ use sepiida_core::{
     },
 };
 
-use super::{acrylic::OwnAcrylic, measured::Measured};
+use super::{
+    acrylic::OwnAcrylic, blur::BlurBrushes, markup, measured::Measured,
+    transparent::TransparentBrush,
+};
 use windows::core::IUnknown;
 
 use crate::{log::log, properties::Xaml, xamlom::InstanceHandle};
@@ -46,6 +49,8 @@ struct Applied {
     held: Option<IUnknown>,
     /// The type a parsed value was made as, to make a new one later.
     type_name: Option<String>,
+    /// The value we set, to notice when Windows puts its own back.
+    ours: InstanceHandle,
 }
 
 #[derive(Default)]
@@ -55,6 +60,8 @@ pub struct Layouts {
     /// Each role's colour and tint opacity, for the acrylic values.
     colors: HashMap<Role, (Color, Option<Opacity>)>,
     acrylic: OwnAcrylic,
+    transparent: TransparentBrush,
+    blur: BlurBrushes,
     /// Elements whose layout is logged on every switch (`Effect::Probe`).
     probes: Vec<(Handle, &'static str)>,
     measured: Measured,
@@ -84,6 +91,20 @@ impl Layouts {
         value: Value,
     ) {
         if self.targets.contains_key(&found) {
+            return;
+        }
+        // Two rules on one property would stack: the second would save the
+        // first one's value as the original. The first rule wins.
+        if let Some((_, first)) = self
+            .targets
+            .iter()
+            .find(|(m, t)| m.handle == found.handle && t.property == property)
+        {
+            log!(
+                "{label} {:#x}: {property} already set by {}; left to it",
+                found.handle,
+                first.label
+            );
             return;
         }
         log!("{label} found: {:#x}", found.handle);
@@ -130,6 +151,38 @@ impl Layouts {
         }
         if self.on {
             self.relayout(xaml);
+        }
+    }
+
+    /// Sets our brush again where Windows put its own brush back (a
+    /// surface reopening, a theme switch, a toast built before its brush),
+    /// holding Windows' new brush as the one to restore. Cheap: one
+    /// property read per applied brush.
+    pub fn recheck(&mut self, xaml: &Xaml) {
+        if !self.on {
+            return;
+        }
+        for (found, target) in &mut self.targets {
+            let Some(applied) = target.applied.as_mut() else {
+                continue;
+            };
+            if !is_brush(target.value) {
+                continue;
+            }
+            let Some(now) = xaml.property(found.handle, applied.index) else {
+                continue;
+            };
+            if now == applied.ours {
+                continue;
+            }
+            applied.held = xaml.object(now);
+            applied.restore = Restore::Hold;
+            let hr = xaml.set_property(found.handle, applied.index, applied.ours);
+            log!(
+                "{} {:#x}: Windows put {now:#x} back; ours again: {hr}",
+                target.label,
+                found.handle
+            );
         }
     }
 
@@ -280,6 +333,51 @@ impl Layouts {
                     );
                 }
             }
+            Make::Transparent => match self.transparent.handle(xaml) {
+                Some(brush) => {
+                    self.set(xaml, found, index, brush, "transparent", &write.restore);
+                }
+                None => log!("{label} {handle:#x}: no transparent brush"),
+            },
+            &Make::Blur {
+                amount,
+                role,
+                opacity,
+            } => {
+                let Some(&(color, _)) = self.colors.get(&role) else {
+                    log!("{label} {handle:#x}: waits for the {role:?} colour");
+                    return;
+                };
+                let made = self
+                    .blur
+                    .brush(xaml, handle, (role, color), amount, opacity)
+                    .and_then(|brush| xaml.handle_of(brush));
+                match made {
+                    Some(brush) => {
+                        self.set(
+                            xaml,
+                            found,
+                            index,
+                            brush,
+                            &value.to_string(),
+                            &write.restore,
+                        );
+                    }
+                    None => log!("{label} {handle:#x}: no blur brush"),
+                }
+            }
+            Make::Xaml(document) => {
+                // Held until set: the element keeps its own reference.
+                let Some(object) = markup::load(document) else {
+                    return;
+                };
+                match xaml.handle_of(&object) {
+                    Some(made) => {
+                        self.set(xaml, found, index, made, &value.to_string(), &write.restore);
+                    }
+                    None => log!("{label} {handle:#x}: no handle for the XAML value"),
+                }
+            }
         }
     }
 
@@ -315,6 +413,7 @@ impl Layouts {
                 restore: restore.clone(),
                 held,
                 type_name: None,
+                ours: value,
             });
         }
         hr.is_ok()
@@ -325,11 +424,12 @@ impl Layouts {
     pub fn set_color(&mut self, xaml: &Xaml, role: Role, color: Color, opacity: Option<Opacity>) {
         self.colors.insert(role, (color, opacity));
         self.acrylic.retint(role, color, opacity);
+        self.blur.set_color(role, color);
         if self.on {
             let waiting: Vec<Match> = self
                 .targets
                 .iter()
-                .filter(|(_, t)| t.applied.is_none() && t.value == Value::Acrylic(role))
+                .filter(|(_, t)| t.applied.is_none() && waits_for(t.value, role))
                 .map(|(&found, _)| found)
                 .collect();
             for found in waiting {
@@ -383,4 +483,21 @@ impl Layouts {
             self.set_on(xaml, false);
         }
     }
+}
+
+/// Whether a look value is made only once `role` has a colour.
+fn waits_for(value: Value, role: Role) -> bool {
+    match value {
+        Value::Acrylic(r) | Value::Blur { role: r, .. } => r == role,
+        _ => false,
+    }
+}
+
+/// Whether a look value is a brush object of ours, which Windows may
+/// replace with its own.
+fn is_brush(value: Value) -> bool {
+    matches!(
+        value,
+        Value::Acrylic(_) | Value::Transparent | Value::Xaml(_) | Value::Blur { .. }
+    )
 }

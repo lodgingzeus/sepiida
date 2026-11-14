@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use sepiida_core::shell::{
     hosts::Host,
-    rules::{Rule, rules_for},
+    rules::{Rule, rules_for, skipped_for},
 };
 
 use crate::log::log;
@@ -38,7 +38,20 @@ pub fn rules() -> &'static [Rule] {
     if let Some(rules) = *tests::RULES.lock().unwrap_or_else(|e| e.into_inner()) {
         return rules;
     }
-    current().map_or(&[], rules_for)
+    let Some(host) = current() else {
+        return &[];
+    };
+    static LOGGED: OnceLock<()> = OnceLock::new();
+    LOGGED.get_or_init(|| {
+        for skipped in skipped_for(host) {
+            log!(
+                "theme entry left out: {}: {}",
+                skipped.target,
+                skipped.reason
+            );
+        }
+    });
+    rules_for(host)
 }
 
 #[cfg(all(test, windows))]

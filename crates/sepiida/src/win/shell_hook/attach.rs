@@ -68,7 +68,8 @@ pub struct Attached {
 
 pub type ModuleCheck = Result<Option<PathBuf>, windows::core::Error>;
 
-type InitializeExport = unsafe extern "system" fn(u32, u32, u32, u32, u32, *mut u32) -> HRESULT;
+type InitializeExport =
+    unsafe extern "system" fn(u32, u32, u32, *const u32, u32, *mut u32) -> HRESULT;
 
 /// The taskbar window, and the process and thread that own it.
 pub struct Taskbar {
@@ -312,20 +313,22 @@ fn attach_remote(
 ) -> Result<(u32, HRESULT), ShellHookError> {
     let proc = library.export(INITIALIZE_EXPORT)?;
     // SAFETY: the export's documented signature (see the DLL's
-    // `SepiidaAttachWithColors`).
+    // `SepiidaAttachWithRoles`).
     let initialize = unsafe {
         std::mem::transmute::<unsafe extern "system" fn() -> isize, InitializeExport>(proc)
     };
     let mut connection = 0;
-    // SAFETY: `connection` is writable.
-    let [surface, accent] = request.export_colors();
+    let colors = request.export_colors();
+    let count = u32::try_from(colors.len()).unwrap_or(u32::MAX);
+    // SAFETY: `colors` holds `count` values and outlives the call;
+    // `connection` is writable.
     let hr = unsafe {
         initialize(
             pid,
             from,
             request.mode.id(),
-            surface,
-            accent,
+            colors.as_ptr(),
+            count,
             &mut connection,
         )
     };

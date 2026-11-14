@@ -8,6 +8,7 @@ pub mod crash_guard;
 pub mod finder;
 pub mod hosts;
 pub mod layout;
+pub mod markup;
 pub mod measure;
 pub mod protocol;
 pub mod rules;

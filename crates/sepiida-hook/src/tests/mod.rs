@@ -3,9 +3,9 @@
 //! through the control window, re-attach and detach. Windows only (it uses
 //! real COM objects and a real message-only window); runs in CI.
 //!
-//! The tests here paint the taskbar solid through a test-only rule, so the
-//! solid path stays covered although no shipped rule uses it; the shipped,
-//! tinted taskbar is tested in `tint`.
+//! The tests here paint the taskbar solid through a test-only rule, the
+//! oldest cover of the solid path; the shipped, tinted taskbar is tested in
+//! `tint`, the shipped solid notification cards in `flyouts`.
 
 use std::{
     sync::{Mutex, MutexGuard},
@@ -35,12 +35,13 @@ use windows::{
 use crate::{DllGetClassObject, tap::Factory, xamlom::*};
 
 mod fake;
+mod flyouts;
 mod layout;
 mod tint;
 
 use fake::*;
 
-const TASKBAR_BACKGROUND_NAME: &str = TASKBAR_BACKGROUND.name;
+const TASKBAR_BACKGROUND_NAME: &str = "BackgroundFill";
 const BRUSH: &str = "Windows.UI.Xaml.Media.SolidColorBrush";
 
 /// The taskbar background painted solid, as before M4 moved it to tint.

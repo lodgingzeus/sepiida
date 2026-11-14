@@ -10,8 +10,8 @@
 //!
 //! The string is `<tag>(;<role id>=<rrggbb>)*`, e.g.
 //! `sepiida:style;1=336699`. sepiida.exe hands the DLL's attach export
-//! fixed-size numbers, never a string, and the export writes the string
-//! itself; the DLL parses it strictly and takes no colour from anything
+//! one fixed-size number per role (a pointer and a count it checks),
+//! never a string, and the export writes the string itself; the DLL parses it strictly and takes no colour from anything
 //! malformed.
 
 use super::{hosts::AttachMode, rules::Role};
@@ -158,6 +158,14 @@ mod tests {
             ),
             AttachRequest::new(AttachMode::StyleAlongside, &[]),
             AttachRequest::new(AttachMode::Dump, &[]),
+            AttachRequest::new(
+                AttachMode::Style,
+                &[
+                    (Role::SurfaceRaised, BLUE),
+                    (Role::Accent, BLACK),
+                    (Role::Surface, BLUE),
+                ],
+            ),
         ] {
             let data = request.init_data().unwrap_or_default();
             assert_eq!(AttachRequest::from_init_data(&data), request, "{data}");
@@ -179,8 +187,9 @@ mod tests {
             Some("sepiida:style;1=336699;2=000000")
         );
         assert_eq!(AttachRequest::new(AttachMode::Style, &[]).init_data(), None);
+        let every_role: Vec<(Role, Color)> = Role::ALL.iter().map(|&r| (r, BLUE)).collect();
         assert!(
-            AttachRequest::new(AttachMode::Style, &[(Role::Surface, BLUE)])
+            AttachRequest::new(AttachMode::StyleAlongside, &every_role)
                 .init_data()
                 .is_some_and(|d| d.len() <= MAX_INIT_DATA)
         );
@@ -204,7 +213,7 @@ mod tests {
             "sepiida:style;1=33669",
             "sepiida:style;1=3366999",
             "sepiida:style;1=33669g",
-            "sepiida:style;3=336699",
+            "sepiida:style;4=336699",
             "sepiida:style;0=336699",
             "sepiida:style;1=336699;1=000000",
             "sepiida:style;1=336699;",
@@ -241,22 +250,22 @@ mod tests {
     #[test]
     fn export_values_need_the_colour_marker() {
         assert_eq!(
-            AttachRequest::from_export(AttachMode::Style, [0x0133_6699, 0])
+            AttachRequest::from_export(AttachMode::Style, [0x0133_6699, 0, 0])
                 .map(|r| r.colors().to_vec()),
             Some(vec![(Role::Surface, BLUE)])
         );
         // Black is a colour, not "none".
         assert_eq!(
-            AttachRequest::from_export(AttachMode::Style, [0x0100_0000, 0])
+            AttachRequest::from_export(AttachMode::Style, [0x0100_0000, 0, 0])
                 .map(|r| r.colors().to_vec()),
             Some(vec![(Role::Surface, BLACK)])
         );
         assert_eq!(
-            AttachRequest::from_export(AttachMode::Style, [0x0233_6699, 0]),
+            AttachRequest::from_export(AttachMode::Style, [0x0233_6699, 0, 0]),
             None
         );
         assert_eq!(
-            AttachRequest::from_export(AttachMode::Style, [0x0033_6699, 0]),
+            AttachRequest::from_export(AttachMode::Style, [0x0033_6699, 0, 0]),
             None
         );
     }

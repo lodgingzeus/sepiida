@@ -41,11 +41,12 @@ struct UiState {
 impl UiState {
     fn log_summary(&self) {
         log!(
-            "state: {} elements, anchor seen: {}, {} target(s), {} near miss(es)",
+            "state: {} elements, anchor seen: {}, {} target(s), {} near miss(es), {} dropped",
             self.finder.element_count(),
             self.finder.saw_anchor(),
             self.finder.matched_count(),
-            self.finder.near_miss_count()
+            self.finder.near_miss_count(),
+            self.finder.pending_dropped_count()
         );
     }
 }
@@ -205,7 +206,7 @@ fn on_change(
             .is_none_or(|at| now.duration_since(at) >= RECHECK_EVERY)
         {
             state.last_recheck = Some(now);
-            state.styler.recheck_tints();
+            state.styler.recheck_colors();
         }
     });
 }

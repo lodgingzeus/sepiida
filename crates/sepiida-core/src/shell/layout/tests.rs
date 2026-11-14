@@ -162,6 +162,33 @@ fn an_acrylic_brush_replaces_a_styled_brush_and_never_a_local_one() {
 }
 
 #[test]
+fn transparent_clears_a_styled_brush_and_holds_a_local_one() {
+    const BRUSH: &str = "Windows.UI.Xaml.Media.Brush";
+    let clear = Value::Transparent;
+    assert_eq!(
+        plan_write(&clear, &current(BRUSH, ValueSource::Other, "")),
+        Ok(Write {
+            make: Make::Transparent,
+            restore: Restore::Clear,
+        })
+    );
+    assert_eq!(
+        plan_write(&clear, &current(BRUSH, ValueSource::Local, "2186123665552")),
+        Ok(Write {
+            make: Make::Transparent,
+            restore: Restore::Hold,
+        })
+    );
+    assert_eq!(
+        plan_write(&clear, &current(BRUSH, ValueSource::VisualState, "")),
+        Err(Skip::Driven(ValueSource::VisualState))
+    );
+    assert!(plan_write(&clear, &current(THICKNESS, ValueSource::Other, "0")).is_err());
+    assert!(clear.is_valid());
+    assert_eq!(clear.to_string(), "transparent");
+}
+
+#[test]
 fn a_local_original_without_a_string_is_held() {
     const CORNERS: &str = "Windows.UI.Xaml.CornerRadius";
     let write = plan_write(
@@ -198,4 +225,71 @@ fn auto_and_alignment_offer_name_then_number() {
         )
         .is_ok()
     );
+}
+
+#[test]
+fn a_xaml_value_is_loaded_and_a_local_original_held() {
+    const BRUSH: &str = "Windows.UI.Xaml.Media.Brush";
+    let value = Value::Xaml("<SolidColorBrush Color=\"Red\" />");
+    let write = plan_write(&value, &current(BRUSH, ValueSource::Local, "123")).unwrap();
+    assert_eq!(write.restore, Restore::Hold);
+    assert!(matches!(&write.make, Make::Xaml(d) if d.starts_with("<SolidColorBrush xmlns=")));
+    assert_eq!(
+        plan_write(&value, &current(BRUSH, ValueSource::Other, "")).map(|w| w.restore),
+        Ok(Restore::Clear)
+    );
+    let unsafe_value = Value::Xaml("<ImageBrush ImageSource=\"https://x/a.png\" />");
+    assert_eq!(
+        plan_write(&unsafe_value, &current(BRUSH, ValueSource::Other, "")),
+        Err(Skip::Invalid)
+    );
+}
+
+#[test]
+fn text_is_made_by_xaml_and_short_forms_are_spelled_out() {
+    const CORNERS: &str = "Windows.UI.Xaml.CornerRadius";
+    const BRUSH: &str = "Windows.UI.Xaml.Media.Brush";
+    let parse = |value: Value, type_name: &str, source, original: &str| {
+        plan_write(&value, &current(type_name, source, original))
+    };
+    assert_eq!(
+        parse(Value::Text("14"), CORNERS, ValueSource::Other, ""),
+        Ok(Write {
+            make: Make::Parse {
+                type_name: CORNERS.to_owned(),
+                candidates: vec!["14,14,14,14".to_owned(), "14".to_owned()],
+            },
+            restore: Restore::Clear,
+        })
+    );
+    assert_eq!(
+        parse(Value::Text("4,8"), THICKNESS, ValueSource::Local, "1,2,3,4"),
+        Ok(Write {
+            make: Make::Parse {
+                type_name: THICKNESS.to_owned(),
+                candidates: vec!["4,8,4,8".to_owned(), "4,8".to_owned()],
+            },
+            restore: Restore::Recreate {
+                type_name: THICKNESS.to_owned(),
+                value: "1,2,3,4".to_owned(),
+            },
+        })
+    );
+    // A local brush's string is a handle, not the brush: held instead.
+    assert_eq!(
+        parse(
+            Value::Text("Red"),
+            BRUSH,
+            ValueSource::Local,
+            "2186123665552"
+        )
+        .map(|w| w.restore),
+        Ok(Restore::Hold)
+    );
+    for bad in ["", "<Grid/>", "{ThemeResource X}", "a\nb"] {
+        assert!(!Value::Text(bad).is_valid(), "{bad}");
+    }
+    let long: &'static str = Box::leak("9".repeat(MAX_TEXT + 1).into_boxed_str());
+    assert!(!Value::Text(long).is_valid());
+    assert_eq!(Value::Text("Center").to_string(), "Center");
 }

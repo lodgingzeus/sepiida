@@ -108,6 +108,19 @@ impl Styler {
             // The chain read for the index has logged the value.
             return;
         }
+        if let Some((_, first)) = self
+            .targets
+            .iter()
+            .find(|(m, t)| m.handle == handle && t.property_index == property_index)
+        {
+            log!(
+                "{} {handle:#x}: {} already painted by {}; left to it",
+                rule.label,
+                rule.property,
+                first.label
+            );
+            return;
+        }
         self.targets.insert(
             found,
             Target {
@@ -299,12 +312,18 @@ impl Styler {
         self.tints.trim(&in_use);
     }
 
+    /// Re-applies colours Windows undid while a surface was hidden.
+    /// Cheap: one property read per target. Called on tree activity, which
+    /// comes with a surface opening, so the colour is there as it shows.
+    pub fn recheck_colors(&mut self) {
+        self.recheck_tints();
+        self.recheck_solids();
+        self.layouts.recheck(&self.xaml);
+    }
+
     /// Tints every tinted target whose brush changed since it was last
-    /// tinted (or that had none then). Cheap: one property read per
-    /// target. Called on tree activity, which comes with a surface
-    /// opening, so a brush Windows swapped in while it was hidden gets
-    /// our colour as it shows.
-    pub fn recheck_tints(&mut self) {
+    /// tinted (or that had none then).
+    fn recheck_tints(&mut self) {
         let stale: Vec<Match> = self
             .targets
             .iter()
@@ -324,6 +343,29 @@ impl Styler {
                 );
             }
             self.tint(found);
+        }
+    }
+
+    /// Paints again every painted target on which Windows put its own
+    /// brush back (cards get the theme's brush after a light/dark switch).
+    /// Not after a restore: restored targets are no longer `styled`.
+    fn recheck_solids(&mut self) {
+        let replaced: Vec<Match> = self
+            .targets
+            .iter()
+            .filter(|(_, t)| {
+                t.paint == Paint::Solid && t.styled && self.colors.contains_key(&t.role)
+            })
+            .filter(|(found, t)| {
+                self.xaml
+                    .property(found.handle, t.property_index)
+                    .is_some_and(|value| !self.solid.is_ours(value))
+            })
+            .map(|(&found, _)| found)
+            .collect();
+        // A styled target was painted, so its role's brush exists.
+        for found in replaced {
+            self.paint(found);
         }
     }
 

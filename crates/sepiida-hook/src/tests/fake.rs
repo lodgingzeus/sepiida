@@ -33,6 +33,7 @@ pub(super) const MARGIN_INDEX: u32 = 13;
 pub(super) const RADIUS_X_INDEX: u32 = 14;
 pub(super) const RADIUS_Y_INDEX: u32 = 15;
 pub(super) const VISIBILITY_INDEX: u32 = 16;
+pub(super) const CORNER_RADIUS_INDEX: u32 = 17;
 /// The margin the fake element has as a local value.
 pub(super) const LOCAL_MARGIN: &str = "1,2,3,4";
 /// Windows' own acrylic brush on a sandboxed host's surface.
@@ -304,6 +305,13 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
                     "Visibility",
                     "Windows.UI.Xaml.Visibility",
                     "Visible",
+                    0,
+                ),
+                layout_value(
+                    CORNER_RADIUS_INDEX,
+                    "CornerRadius",
+                    "Windows.UI.Xaml.CornerRadius",
+                    "0,0,0,0",
                     0,
                 ),
             ];

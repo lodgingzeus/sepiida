@@ -21,7 +21,7 @@ pub const CONTROL_WINDOW_CLASS: &str = "sepiida.hook.control";
 /// Version of the commands below. Bumped whenever their meaning changes;
 /// sepiida.exe sends commands only to control windows of its own version,
 /// except `Detach`, which every version understands.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Title of a control window speaking `PROTOCOL_VERSION`.
 pub fn control_window_title() -> String {
@@ -49,12 +49,13 @@ pub fn connection_names(from: u32) -> impl Iterator<Item = (u32, String)> {
 }
 
 /// DLL export that calls `InitializeXamlDiagnosticsEx` for a process:
-/// `extern "system" fn(pid: u32, from: u32, mode: u32, surface: u32,
-/// accent: u32, connection: *mut u32) -> HRESULT`, `mode` being an
-/// `AttachMode` id and the colours `AttachRequest::export_colors`.
+/// `extern "system" fn(pid: u32, from: u32, mode: u32, colors: *const u32,
+/// count: u32, connection: *mut u32) -> HRESULT`, `mode` being an
+/// `AttachMode` id and `colors` pointing at `count` values of
+/// `AttachRequest::export_colors` (`count` must be the number of roles).
 /// Renamed when its arguments changed, so an exe never calls an older DLL's
 /// export with the wrong arguments (it reports a missing export instead).
-pub const INITIALIZE_EXPORT: &str = "SepiidaAttachWithColors";
+pub const INITIALIZE_EXPORT: &str = "SepiidaAttachWithRoles";
 /// DLL export used as a `WH_CALLWNDPROC` hook procedure on the taskbar's
 /// thread, to start the in-process attach.
 pub const HOOK_PROC_EXPORT: &str = "SepiidaCallWndProc";
@@ -193,7 +194,7 @@ mod tests {
         let (restore, _) = Command::Restore.encode();
         let (detach, _) = Command::Detach.encode();
         assert_eq!(Command::decode(set, 0x0012_3456), None); // role 0
-        assert_eq!(Command::decode(set, 0x0312_3456), None); // role 3
+        assert_eq!(Command::decode(set, 0x0412_3456), None); // role 4
         #[cfg(target_pointer_width = "64")]
         assert_eq!(Command::decode(set, 0x1_0112_3456), None);
         assert_eq!(Command::decode(restore, 1), None);
@@ -229,7 +230,7 @@ mod tests {
 
     #[test]
     fn the_control_window_title_carries_the_version() {
-        assert_eq!(control_window_title(), "sepiida.hook.control v4");
+        assert_eq!(control_window_title(), "sepiida.hook.control v5");
     }
 
     #[test]
