@@ -46,7 +46,9 @@ pub fn connection_names(from: u32) -> impl Iterator<Item = (u32, String)> {
 /// `extern "system" fn(pid: u32, from: u32, mode: u32, surface: u32,
 /// accent: u32, connection: *mut u32) -> HRESULT`, `mode` being an
 /// `AttachMode` id and the colours `AttachRequest::export_colors`.
-pub const INITIALIZE_EXPORT: &str = "SepiidaInitializeXamlDiagnostics";
+/// Renamed when its arguments changed, so an exe never calls an older DLL's
+/// export with the wrong arguments (it reports a missing export instead).
+pub const INITIALIZE_EXPORT: &str = "SepiidaAttachWithColors";
 /// DLL export used as a `WH_CALLWNDPROC` hook procedure on the taskbar's
 /// thread, to start the in-process attach.
 pub const HOOK_PROC_EXPORT: &str = "SepiidaCallWndProc";

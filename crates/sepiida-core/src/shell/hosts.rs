@@ -83,9 +83,11 @@ pub enum AttachMode {
     /// style attachment in the process.
     #[default]
     Style,
-    /// Like `Style`, but beside the attachments already there: for the
-    /// further XAML cores of a process (ShellHost keeps quick settings
-    /// behind another diagnostics connection than its first).
+    /// Like `Style`, but beside the attachments already there: for any
+    /// further diagnostics connection of a process. A hedge: on build
+    /// 26100 one attachment covered every XAML thread of each host seen
+    /// (ShellHost has one connection; ShellExperienceHost answers on three,
+    /// and the first alone saw all its threads).
     StyleAlongside,
     /// Log every element and style nothing.
     Dump,

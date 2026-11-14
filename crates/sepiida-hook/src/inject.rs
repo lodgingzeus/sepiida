@@ -9,7 +9,7 @@
 //!
 //! Two ways to reach it, both exported for sepiida.exe:
 //! - Cross-process: sepiida.exe loads this DLL into itself and calls
-//!   [`SepiidaInitializeXamlDiagnostics`] with Explorer's pid.
+//!   [`SepiidaAttachWithColors`] with Explorer's pid.
 //! - In-process (TranslucentTB's current method): sepiida.exe installs
 //!   [`SepiidaCallWndProc`] as a `WH_CALLWNDPROC` hook on the taskbar's
 //!   thread only, which maps this DLL into Explorer, and sends the taskbar
@@ -145,7 +145,7 @@ fn call_on_fresh_thread(
 /// # Safety
 /// `connection` must be null or writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn SepiidaInitializeXamlDiagnostics(
+pub unsafe extern "system" fn SepiidaAttachWithColors(
     pid: u32,
     from: u32,
     mode: u32,
@@ -153,7 +153,7 @@ pub unsafe extern "system" fn SepiidaInitializeXamlDiagnostics(
     accent: u32,
     connection: *mut u32,
 ) -> HRESULT {
-    guard("SepiidaInitializeXamlDiagnostics", E_UNEXPECTED, || {
+    guard("SepiidaAttachWithColors", E_UNEXPECTED, || {
         if connection.is_null() {
             return E_POINTER;
         }

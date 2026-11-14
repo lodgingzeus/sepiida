@@ -106,7 +106,11 @@ impl HostStyling {
     /// A ShellExperienceHost window appeared: attaches to it if styling is
     /// on and it is not attached yet.
     pub fn flyout_shown(&mut self, pid: u32) {
-        if self.colors.is_empty() || shell_hook::is_attached(pid) {
+        if self.colors.is_empty() {
+            return;
+        }
+        if shell_hook::is_attached(pid) {
+            info!(pid, "flyout host already attached");
             return;
         }
         let Some(dll) = self.dll() else {

@@ -2,8 +2,9 @@
 //! the calendar or a toast. Their XAML exists only while shown, so the
 //! agent can attach the styling DLL only then.
 //!
-//! An out-of-context WinEvent hook for `EVENT_OBJECT_SHOW` on a thread of
-//! its own (the events arrive as messages on that thread; nothing is
+//! Out-of-context WinEvent hooks for `EVENT_OBJECT_SHOW` and
+//! `EVENT_OBJECT_UNCLOAKED` (Windows may cloak a flyout's window rather
+//! than hide it) on a thread of their own (the events arrive as messages on that thread; nothing is
 //! loaded into other processes). Every shown window in the session passes
 //! through the callback, so it filters cheaply: whole windows only, one
 //! process-name lookup per new process id (cached), and at most one report
@@ -18,12 +19,13 @@ use std::{
 };
 
 use sepiida_core::shell::hosts::Host;
+use tracing::info;
 use windows::Win32::{
     Foundation::HWND,
     UI::{
         Accessibility::{HWINEVENTHOOK, SetWinEventHook},
         WindowsAndMessaging::{
-            CHILDID_SELF, DispatchMessageW, EVENT_OBJECT_SHOW, GetMessageW,
+            CHILDID_SELF, DispatchMessageW, EVENT_OBJECT_SHOW, EVENT_OBJECT_UNCLOAKED, GetMessageW,
             GetWindowThreadProcessId, MSG, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT,
             WINEVENT_SKIPOWNPROCESS,
         },
@@ -73,12 +75,12 @@ pub fn spawn(on_shown: impl Fn(u32) + Send + 'static) -> Result<(), FlyoutEvents
                     last: None,
                 });
             });
-            // SAFETY: `on_event` lives for the whole program; the hook
-            // belongs to this thread, which runs a message loop below.
-            let hook = unsafe {
+            // SAFETY: `on_event` lives for the whole program; the hooks
+            // belong to this thread, which runs a message loop below.
+            let hook = |event: u32| unsafe {
                 SetWinEventHook(
-                    EVENT_OBJECT_SHOW,
-                    EVENT_OBJECT_SHOW,
+                    event,
+                    event,
                     None,
                     Some(on_event),
                     0,
@@ -86,7 +88,9 @@ pub fn spawn(on_shown: impl Fn(u32) + Send + 'static) -> Result<(), FlyoutEvents
                     WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
                 )
             };
-            let ok = !hook.0.is_null();
+            let show = hook(EVENT_OBJECT_SHOW);
+            let uncloak = hook(EVENT_OBJECT_UNCLOAKED);
+            let ok = !show.0.is_null() || !uncloak.0.is_null();
             let _ = ready_tx.send(ok);
             if ok {
                 message_loop();
@@ -113,7 +117,7 @@ fn message_loop() {
 
 unsafe extern "system" fn on_event(
     _hook: HWINEVENTHOOK,
-    _event: u32,
+    event: u32,
     window: HWND,
     object: i32,
     child: i32,
@@ -129,12 +133,12 @@ unsafe extern "system" fn on_event(
         // SAFETY: plain call; `pid` is writable.
         unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
         if pid != 0 {
-            shown(pid);
+            shown(pid, event);
         }
     });
 }
 
-fn shown(pid: u32) {
+fn shown(pid: u32, event: u32) {
     WATCH.with(|cell| {
         let Ok(mut slot) = cell.try_borrow_mut() else {
             return;
@@ -160,6 +164,12 @@ fn shown(pid: u32) {
             return;
         }
         watch.last = Some((pid, now));
+        let kind = if event == EVENT_OBJECT_UNCLOAKED {
+            "uncloaked"
+        } else {
+            "shown"
+        };
+        info!(pid, kind, "ShellExperienceHost window appeared");
         (watch.on_shown)(pid);
     });
 }

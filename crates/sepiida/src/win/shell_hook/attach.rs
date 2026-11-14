@@ -259,12 +259,12 @@ pub struct SandboxAttached {
 /// Asks XAML in a sandboxed shell host (Start, quick settings, the
 /// notification centre) to load the DLL in style mode, from sepiida.exe,
 /// after detaching any earlier copy, through every connection that
-/// answers: one attachment sees every XAML thread of one core
-/// (ShellExperienceHost), but ShellHost keeps quick settings in a further
-/// core behind another connection. The first attaches in style mode, the
-/// rest alongside it. `colors` travel with the attach, so a host that is
-/// shown later starts with them. The host cannot reach our `Local\` events, so success is judged by the DLL's
-/// control window appearing within `timeout`.
+/// answers: the first in style mode, the rest alongside it. (On build
+/// 26100 the first alone covered every XAML thread; the others are a
+/// hedge for builds where a host keeps a separate core.) `colors` travel
+/// with the attach, so a host that is shown later starts with them. The
+/// host cannot reach our `Local\` events, so success is judged by the
+/// DLL's control window appearing within `timeout`.
 pub fn attach_sandboxed(
     pid: u32,
     dll: &Path,
@@ -312,7 +312,7 @@ fn attach_remote(
 ) -> Result<(u32, HRESULT), ShellHookError> {
     let proc = library.export(INITIALIZE_EXPORT)?;
     // SAFETY: the export's documented signature (see the DLL's
-    // `SepiidaInitializeXamlDiagnostics`).
+    // `SepiidaAttachWithColors`).
     let initialize = unsafe {
         std::mem::transmute::<unsafe extern "system" fn() -> isize, InitializeExport>(proc)
     };
