@@ -1,7 +1,9 @@
-//! The one active attachment: which diagnostics service we are watching and
-//! with which callback object. Attaching again replaces it, detaching ends
-//! it. Each attachment gets a new generation number, so callbacks that
-//! arrive late for an old one are recognised and ignored.
+//! The active style attachments: which diagnostics services we are
+//! watching and with which callback objects. A style attach replaces them
+//! all; a style-alongside attach adds one for a further XAML core of the
+//! process; detaching ends them all. Each attachment gets a new generation
+//! number, so callbacks that arrive late for an old one are recognised and
+//! ignored.
 
 use std::{
     sync::{
@@ -39,25 +41,26 @@ struct SendCom<T>(T);
 unsafe impl<T> Send for SendCom<T> {}
 
 struct Active {
+    generation: u64,
     service: SendCom<IVisualTreeService3>,
     watcher: SendCom<IVisualTreeServiceCallback2>,
 }
 
-static ACTIVE: Mutex<Option<Active>> = Mutex::new(None);
+static ACTIVE: Mutex<Vec<Active>> = Mutex::new(Vec::new());
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
-fn active() -> std::sync::MutexGuard<'static, Option<Active>> {
+fn active() -> std::sync::MutexGuard<'static, Vec<Active>> {
     ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Whether callbacks of this generation still belong to the active
+/// Whether callbacks of this generation still belong to an active
 /// attachment.
 pub fn is_current(generation: u64) -> bool {
-    GENERATION.load(Ordering::Acquire) == generation
+    active().iter().any(|a| a.generation == generation)
 }
 
 /// Starts watching the visual tree behind `site` (XAML's
-/// `IXamlDiagnostics`), replacing any earlier attachment.
+/// `IXamlDiagnostics`); a style attach first ends every earlier one.
 pub fn attach(site: &IUnknown) -> Result<()> {
     let diagnostics: IXamlDiagnostics = site.cast()?;
     let service: IVisualTreeService3 = site.cast()?;
@@ -66,6 +69,7 @@ pub fn attach(site: &IUnknown) -> Result<()> {
     // run side by side and are stopped together (see `dump`).
     match mode {
         AttachMode::Style => detach(),
+        AttachMode::StyleAlongside => {}
         AttachMode::Dump => dump::started(),
     }
 
@@ -76,8 +80,9 @@ pub fn attach(site: &IUnknown) -> Result<()> {
     log!("attaching (generation {generation}, {mode:?} mode) in {exe}");
     let watcher: IVisualTreeServiceCallback2 =
         Watcher::new(generation, mode, diagnostics, service.clone()).into();
-    if mode == AttachMode::Style {
-        *active() = Some(Active {
+    if mode != AttachMode::Dump {
+        active().push(Active {
+            generation,
             service: SendCom(service.clone()),
             watcher: SendCom(watcher.clone()),
         });
@@ -119,27 +124,29 @@ fn attach_mode(diagnostics: &IXamlDiagnostics) -> AttachMode {
     AttachMode::from_init_data(&data.to_string())
 }
 
-/// Stops the active attachment, if any. Brushes are put back by the UI
+/// Stops every active attachment. Brushes are put back by the UI
 /// thread before it calls this.
 pub fn detach() {
-    let Some(old) = active().take() else {
+    let old: Vec<Active> = active().drain(..).collect();
+    if old.is_empty() {
         return;
-    };
-    GENERATION.fetch_add(1, Ordering::AcqRel);
-    log!("detaching");
+    }
+    log!("detaching {} attachment(s)", old.len());
     let spawned = thread::Builder::new()
         .name("sepiida-unadvise".into())
         .spawn(move || {
             crate::guard("unadvise thread", (), || {
-                let old = old;
-                // SAFETY: both pointers are live until `old` drops below.
-                let hr = unsafe {
-                    old.service
-                        .0
-                        .UnadviseVisualTreeChange(old.watcher.0.as_raw())
-                };
-                if hr.is_err() {
-                    log!("UnadviseVisualTreeChange failed: {hr}");
+                for old in &old {
+                    // SAFETY: both pointers are live until `old` drops
+                    // after the loop.
+                    let hr = unsafe {
+                        old.service
+                            .0
+                            .UnadviseVisualTreeChange(old.watcher.0.as_raw())
+                    };
+                    if hr.is_err() {
+                        log!("UnadviseVisualTreeChange failed: {hr}");
+                    }
                 }
             });
         });

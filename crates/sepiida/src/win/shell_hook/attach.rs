@@ -240,9 +240,8 @@ pub fn attach_dump(pid: u32, dll: &Path) -> Result<Vec<(u32, HRESULT)>, ShellHoo
 pub struct SandboxAttached {
     /// Control windows of earlier copies asked to detach first.
     pub replaced: usize,
-    /// The connection that answered and its result.
-    pub connection: u32,
-    pub result: HRESULT,
+    /// Every connection that answered, and its result.
+    pub answered: Vec<(u32, HRESULT)>,
     /// Whether the DLL's control window appeared in time. A host that is
     /// suspended (Start while closed) only runs the DLL once it is shown.
     pub confirmed: bool,
@@ -250,9 +249,11 @@ pub struct SandboxAttached {
 
 /// Asks XAML in a sandboxed shell host (Start, quick settings, the
 /// notification centre) to load the DLL in style mode, from sepiida.exe,
-/// after detaching any earlier copy. One attachment sees every XAML thread
-/// of the process, so the first answering connection is enough. The host
-/// cannot reach our `Local\` events, so success is judged by the DLL's
+/// after detaching any earlier copy, through every connection that
+/// answers: one attachment sees every XAML thread of one core
+/// (ShellExperienceHost), but ShellHost keeps quick settings in a further
+/// core behind another connection. The first attaches in style mode, the
+/// rest alongside it. The host cannot reach our `Local\` events, so success is judged by the DLL's
 /// control window appearing within `timeout`.
 pub fn attach_sandboxed(
     pid: u32,
@@ -265,11 +266,29 @@ pub fn attach_sandboxed(
         wait_for_detach(pid);
     }
     let library = Library::load(dll)?;
-    let (connection, result) = attach_remote(pid, &library, 1, AttachMode::Style)?;
+    let mut answered = Vec::new();
+    let mut from = 1;
+    while from <= MAX_CONNECTION {
+        let mode = if answered.is_empty() {
+            AttachMode::Style
+        } else {
+            AttachMode::StyleAlongside
+        };
+        match attach_remote(pid, &library, from, mode) {
+            Ok((connection, hr)) | Err(ShellHookError::Refused { connection, hr }) => {
+                answered.push((connection, hr));
+                from = connection + 1;
+            }
+            Err(ShellHookError::NoConnection) => break,
+            Err(error) => return Err(error),
+        }
+    }
+    if answered.is_empty() {
+        return Err(ShellHookError::NoConnection);
+    }
     Ok(SandboxAttached {
         replaced,
-        connection,
-        result,
+        answered,
         confirmed: wait_until_attached(pid, timeout),
     })
 }

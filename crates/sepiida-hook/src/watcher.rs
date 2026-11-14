@@ -113,6 +113,14 @@ fn on_change(
             log!("re-entrant tree callback skipped");
             return;
         };
+        if let Some(owner) = slot.as_ref().map(|s| s.generation)
+            && owner != watcher.generation
+            && session::is_current(owner)
+        {
+            // Another live attachment (one beside us on a further XAML
+            // core) already styles this thread; two stylers would fight.
+            return;
+        }
         if slot
             .as_ref()
             .is_none_or(|s| s.generation != watcher.generation)

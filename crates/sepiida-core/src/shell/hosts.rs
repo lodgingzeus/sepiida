@@ -74,13 +74,19 @@ pub const MAX_DUMPED_ELEMENTS: usize = 20_000;
 pub const FALLBACK_LOG_FILE: &str = "sepiida-hook.log";
 
 const DUMP_INIT_DATA: &str = "sepiida:dump";
+const ALONGSIDE_INIT_DATA: &str = "sepiida:style-alongside";
 
 /// What the DLL does once attached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AttachMode {
-    /// Watch for styling targets and take commands (the taskbar).
+    /// Watch for styling targets and take commands, replacing any earlier
+    /// style attachment in the process.
     #[default]
     Style,
+    /// Like `Style`, but beside the attachments already there: for the
+    /// further XAML cores of a process (ShellHost keeps quick settings
+    /// behind another diagnostics connection than its first).
+    StyleAlongside,
     /// Log every element and style nothing.
     Dump,
 }
@@ -91,6 +97,7 @@ impl AttachMode {
     pub fn init_data(self) -> Option<&'static str> {
         match self {
             Self::Style => None,
+            Self::StyleAlongside => Some(ALONGSIDE_INIT_DATA),
             Self::Dump => Some(DUMP_INIT_DATA),
         }
     }
@@ -98,10 +105,10 @@ impl AttachMode {
     /// The mode an initialisation string asks for. Anything unknown,
     /// including no data, means the default.
     pub fn from_init_data(data: &str) -> Self {
-        if data == DUMP_INIT_DATA {
-            Self::Dump
-        } else {
-            Self::Style
+        match data {
+            DUMP_INIT_DATA => Self::Dump,
+            ALONGSIDE_INIT_DATA => Self::StyleAlongside,
+            _ => Self::Style,
         }
     }
 
@@ -110,6 +117,7 @@ impl AttachMode {
         match self {
             Self::Style => 0,
             Self::Dump => 1,
+            Self::StyleAlongside => 2,
         }
     }
 
@@ -117,6 +125,7 @@ impl AttachMode {
         match id {
             0 => Some(Self::Style),
             1 => Some(Self::Dump),
+            2 => Some(Self::StyleAlongside),
             _ => None,
         }
     }
@@ -150,14 +159,18 @@ mod tests {
 
     #[test]
     fn modes_round_trip_through_init_data_and_ids() {
-        for mode in [AttachMode::Style, AttachMode::Dump] {
+        for mode in [
+            AttachMode::Style,
+            AttachMode::StyleAlongside,
+            AttachMode::Dump,
+        ] {
             assert_eq!(
                 AttachMode::from_init_data(mode.init_data().unwrap_or("")),
                 mode
             );
             assert_eq!(AttachMode::from_id(mode.id()), Some(mode));
         }
-        assert_eq!(AttachMode::from_id(2), None);
+        assert_eq!(AttachMode::from_id(3), None);
     }
 
     #[test]

@@ -320,6 +320,39 @@ fn dump_mode_logs_the_tree_and_styles_nothing() {
 }
 
 #[test]
+fn an_alongside_attach_keeps_the_first_and_detach_ends_both() {
+    let _serial = serial();
+    let (first, site) = new_fake();
+    let tap = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap.SetSite(&site) }.unwrap();
+    let callback = wait_for_callback(&first);
+    add_taskbar(&callback);
+
+    // A further XAML core of the same process.
+    let (second, site2) = new_fake();
+    *second.init_data.lock().unwrap() = Some("sepiida:style-alongside".into());
+    let tap2 = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap2.SetSite(&site2) }.unwrap();
+    let callback2 = wait_for_callback(&second);
+    assert!(!first.has("Unadvise"));
+    // Its callbacks for a thread the first attachment styles are ignored,
+    // so two stylers never fight over one taskbar.
+    add_taskbar(&callback2);
+    assert!(!second.has("GetPropertyValuesChain 0x5"));
+    // The first attachment still styles.
+    send(Command::SetColor(Role::Surface, Color::new(1, 2, 3)));
+    assert!(first.has(&format!("SetProperty 0x5 {FILL_INDEX} 0x1000")));
+
+    send(Command::Detach);
+    wait_until("both unadvised", || {
+        first.has("Unadvise") && second.has("Unadvise")
+    });
+    assert!(control_window().is_none());
+}
+
+#[test]
 fn a_site_without_the_diagnostics_interfaces_is_refused() {
     let tap = new_tap();
     let not_xaml: IUnknown = Factory.into();

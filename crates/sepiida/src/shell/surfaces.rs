@@ -58,10 +58,12 @@ fn report(who: &str, attached: &SandboxAttached) {
             attached.replaced
         );
     }
-    println!(
-        "{who}: VisualDiagConnection{} returned {:#010x}",
-        attached.connection, attached.result.0
-    );
+    for (connection, hr) in &attached.answered {
+        println!(
+            "{who}: VisualDiagConnection{connection} returned {:#010x}",
+            hr.0
+        );
+    }
     if attached.confirmed {
         println!("{who}: attached; now send a colour with `sepiida shell color <rrggbb>`");
     } else {
