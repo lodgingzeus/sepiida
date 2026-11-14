@@ -42,7 +42,7 @@ pub fn attach(host: Host, delay_secs: u32) -> Result<()> {
     }
     for process in found {
         let who = format!("{} (pid {})", process.name, process.pid);
-        match shell_hook::attach_sandboxed(process.pid, &dll, CONFIRM_TIMEOUT) {
+        match shell_hook::attach_sandboxed(process.pid, &dll, &[], CONFIRM_TIMEOUT) {
             Ok(attached) => report(&who, &attached),
             Err(error) => println!("{who}: {error:#}"),
         }

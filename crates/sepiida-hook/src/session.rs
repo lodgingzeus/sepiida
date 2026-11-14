@@ -21,7 +21,7 @@ use windows::{
     core::{BSTR, HSTRING, IUnknown, Interface, Result},
 };
 
-use sepiida_core::shell::{hosts::AttachMode, protocol};
+use sepiida_core::shell::{attach_request::AttachRequest, hosts::AttachMode, protocol};
 
 use crate::{
     dump,
@@ -64,7 +64,8 @@ pub fn is_current(generation: u64) -> bool {
 pub fn attach(site: &IUnknown) -> Result<()> {
     let diagnostics: IXamlDiagnostics = site.cast()?;
     let service: IVisualTreeService3 = site.cast()?;
-    let mode = attach_mode(&diagnostics);
+    let request = attach_request(&diagnostics);
+    let mode = request.mode;
     // Styling has one attachment; dump attachments (one per XAML core)
     // run side by side and are stopped together (see `dump`).
     match mode {
@@ -77,9 +78,12 @@ pub fn attach(site: &IUnknown) -> Result<()> {
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
-    log!("attaching (generation {generation}, {mode:?} mode) in {exe}");
+    log!(
+        "attaching (generation {generation}, {mode:?} mode, colours {:?}) in {exe}",
+        request.colors()
+    );
     let watcher: IVisualTreeServiceCallback2 =
-        Watcher::new(generation, mode, diagnostics, service.clone()).into();
+        Watcher::new(generation, request, diagnostics, service.clone()).into();
     if mode != AttachMode::Dump {
         active().push(Active {
             generation,
@@ -112,16 +116,16 @@ pub fn attach(site: &IUnknown) -> Result<()> {
     Ok(())
 }
 
-/// The mode sepiida.exe asked for, passed as the initialisation string.
-fn attach_mode(diagnostics: &IXamlDiagnostics) -> AttachMode {
+/// What sepiida.exe asked for, passed as the initialisation string.
+fn attach_request(diagnostics: &IXamlDiagnostics) -> AttachRequest {
     let mut data = BSTR::new();
     // SAFETY: `data` receives a string we own and free on drop.
     let hr = unsafe { diagnostics.GetInitializationData(&mut data) };
     if hr.is_err() {
         log!("GetInitializationData failed: {hr}");
-        return AttachMode::default();
+        return AttachRequest::default();
     }
-    AttachMode::from_init_data(&data.to_string())
+    AttachRequest::from_init_data(&data.to_string())
 }
 
 /// Stops every active attachment. Brushes are put back by the UI

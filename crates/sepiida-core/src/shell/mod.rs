@@ -2,6 +2,7 @@
 //! the hook DLL agree on, and how the DLL reads the XAML visual tree.
 
 pub mod attach_gate;
+pub mod attach_request;
 pub mod colors;
 pub mod crash_guard;
 pub mod finder;

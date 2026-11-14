@@ -113,6 +113,28 @@ fn start_acrylic_is_tinted_and_restored_after_its_element_left() {
 }
 
 #[test]
+fn colours_carried_by_the_attach_paint_without_a_message() {
+    let _serial = serial();
+    crate::host::tests::pretend(Host::StartMenu);
+    let (shared, site) = new_fake();
+    shared
+        .values
+        .lock()
+        .unwrap()
+        .insert((START_BACKGROUND, BACKGROUND_INDEX), ACRYLIC);
+    *shared.init_data.lock().unwrap() = Some("sepiida:style;1=336699".into());
+    let tap = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap.SetSite(&site) }.unwrap();
+    let callback = wait_for_callback(&shared);
+    add(&callback, START_BACKGROUND, 0, BORDER_TYPE, "AcrylicBorder");
+    assert!(shared.has("put_TintColor #CC336699"));
+    assert!(shared.has("put_FallbackColor #FF336699"));
+    detach(&shared);
+    assert!(shared.has("put_TintColor #CC202020"));
+}
+
+#[test]
 fn a_tint_windows_changed_is_the_one_restored() {
     let _serial = serial();
     let (shared, callback) = attach_as(Host::StartMenu, ACRYLIC);

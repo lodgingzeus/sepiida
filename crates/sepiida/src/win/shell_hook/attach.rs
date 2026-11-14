@@ -6,9 +6,12 @@ use std::{
     time::Duration,
 };
 
-use sepiida_core::shell::hosts::AttachMode;
 use sepiida_core::shell::protocol::{
     ATTACH_MESSAGE, HOOK_PROC_EXPORT, INITIALIZE_EXPORT, MAX_CONNECTION,
+};
+use sepiida_core::{
+    Color,
+    shell::{attach_request::AttachRequest, hosts::AttachMode, rules::Role},
 };
 use windows::{
     Win32::{
@@ -65,7 +68,7 @@ pub struct Attached {
 
 pub type ModuleCheck = Result<Option<PathBuf>, windows::core::Error>;
 
-type InitializeExport = unsafe extern "system" fn(u32, u32, u32, *mut u32) -> HRESULT;
+type InitializeExport = unsafe extern "system" fn(u32, u32, u32, u32, u32, *mut u32) -> HRESULT;
 
 /// The taskbar window, and the process and thread that own it.
 pub struct Taskbar {
@@ -129,7 +132,7 @@ pub fn attach(
             (None, hooked.outcome)
         }
         Method::Remote => {
-            let result = attach_remote(taskbar.pid, &library, from, AttachMode::Style)?;
+            let result = attach_remote(taskbar.pid, &library, from, &AttachRequest::default())?;
             (Some(result), signals.wait(READY_TIMEOUT))
         }
     };
@@ -224,7 +227,12 @@ pub fn attach_dump(pid: u32, dll: &Path) -> Result<Vec<(u32, HRESULT)>, ShellHoo
     let mut answered = Vec::new();
     let mut from = 1;
     while from <= MAX_CONNECTION {
-        match attach_remote(pid, &library, from, AttachMode::Dump) {
+        match attach_remote(
+            pid,
+            &library,
+            from,
+            &AttachRequest::new(AttachMode::Dump, &[]),
+        ) {
             Ok((connection, hr)) | Err(ShellHookError::Refused { connection, hr }) => {
                 answered.push((connection, hr));
                 from = connection + 1;
@@ -242,8 +250,9 @@ pub struct SandboxAttached {
     pub replaced: usize,
     /// Every connection that answered, and its result.
     pub answered: Vec<(u32, HRESULT)>,
-    /// Whether the DLL's control window appeared in time. A host that is
-    /// suspended (Start while closed) only runs the DLL once it is shown.
+    /// Whether the DLL's control window appeared in time; always false
+    /// for a zero timeout (not waited for). A host that is suspended
+    /// (Start while closed) only runs the DLL once it is shown.
     pub confirmed: bool,
 }
 
@@ -253,11 +262,13 @@ pub struct SandboxAttached {
 /// answers: one attachment sees every XAML thread of one core
 /// (ShellExperienceHost), but ShellHost keeps quick settings in a further
 /// core behind another connection. The first attaches in style mode, the
-/// rest alongside it. The host cannot reach our `Local\` events, so success is judged by the DLL's
+/// rest alongside it. `colors` travel with the attach, so a host that is
+/// shown later starts with them. The host cannot reach our `Local\` events, so success is judged by the DLL's
 /// control window appearing within `timeout`.
 pub fn attach_sandboxed(
     pid: u32,
     dll: &Path,
+    colors: &[(Role, Color)],
     timeout: Duration,
 ) -> Result<SandboxAttached, ShellHookError> {
     check_arch(pid)?;
@@ -274,7 +285,7 @@ pub fn attach_sandboxed(
         } else {
             AttachMode::StyleAlongside
         };
-        match attach_remote(pid, &library, from, mode) {
+        match attach_remote(pid, &library, from, &AttachRequest::new(mode, colors)) {
             Ok((connection, hr)) | Err(ShellHookError::Refused { connection, hr }) => {
                 answered.push((connection, hr));
                 from = connection + 1;
@@ -289,7 +300,7 @@ pub fn attach_sandboxed(
     Ok(SandboxAttached {
         replaced,
         answered,
-        confirmed: wait_until_attached(pid, timeout),
+        confirmed: !timeout.is_zero() && wait_until_attached(pid, timeout),
     })
 }
 
@@ -297,7 +308,7 @@ fn attach_remote(
     pid: u32,
     library: &Library,
     from: u32,
-    mode: AttachMode,
+    request: &AttachRequest,
 ) -> Result<(u32, HRESULT), ShellHookError> {
     let proc = library.export(INITIALIZE_EXPORT)?;
     // SAFETY: the export's documented signature (see the DLL's
@@ -307,7 +318,17 @@ fn attach_remote(
     };
     let mut connection = 0;
     // SAFETY: `connection` is writable.
-    let hr = unsafe { initialize(pid, from, mode.id(), &mut connection) };
+    let [surface, accent] = request.export_colors();
+    let hr = unsafe {
+        initialize(
+            pid,
+            from,
+            request.mode.id(),
+            surface,
+            accent,
+            &mut connection,
+        )
+    };
     if hr == ERROR_NOT_FOUND.to_hresult() {
         return Err(ShellHookError::NoConnection);
     }

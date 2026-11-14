@@ -5,7 +5,9 @@
 
 use std::cell::RefCell;
 
-use sepiida_core::shell::{finder::Finder, hosts::AttachMode, protocol::Command};
+use sepiida_core::shell::{
+    attach_request::AttachRequest, finder::Finder, hosts::AttachMode, protocol::Command,
+};
 use windows::{
     Win32::Foundation::{E_UNEXPECTED, S_OK},
     core::{HRESULT, PCWSTR, implement},
@@ -49,6 +51,8 @@ thread_local! {
 pub struct Watcher {
     generation: u64,
     mode: AttachMode,
+    /// Colours the attach brought, given to each thread's styler first.
+    request: AttachRequest,
     diagnostics: IXamlDiagnostics,
     service: IVisualTreeService3,
 }
@@ -56,13 +60,14 @@ pub struct Watcher {
 impl Watcher {
     pub fn new(
         generation: u64,
-        mode: AttachMode,
+        request: AttachRequest,
         diagnostics: IXamlDiagnostics,
         service: IVisualTreeService3,
     ) -> Self {
         Self {
             generation,
-            mode,
+            mode: request.mode,
+            request,
             diagnostics,
             service,
         }
@@ -142,6 +147,12 @@ fn on_change(
                 finder: Finder::new(rules),
                 styler: Styler::new(watcher.diagnostics.clone(), watcher.service.clone()),
             });
+            if let Some(state) = slot.as_mut() {
+                // Kept until targets appear (no target exists yet).
+                for &(role, color) in watcher.request.colors() {
+                    state.styler.set_color(role, color);
+                }
+            }
         }
         let Some(state) = slot.as_mut() else {
             return;

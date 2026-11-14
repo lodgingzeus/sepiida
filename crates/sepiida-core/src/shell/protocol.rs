@@ -43,8 +43,9 @@ pub fn connection_names(from: u32) -> impl Iterator<Item = (u32, String)> {
 }
 
 /// DLL export that calls `InitializeXamlDiagnosticsEx` for a process:
-/// `extern "system" fn(pid: u32, from: u32, mode: u32, connection: *mut u32)
-/// -> HRESULT`, `mode` being an `AttachMode` id.
+/// `extern "system" fn(pid: u32, from: u32, mode: u32, surface: u32,
+/// accent: u32, connection: *mut u32) -> HRESULT`, `mode` being an
+/// `AttachMode` id and the colours `AttachRequest::export_colors`.
 pub const INITIALIZE_EXPORT: &str = "SepiidaInitializeXamlDiagnostics";
 /// DLL export used as a `WH_CALLWNDPROC` hook procedure on the taskbar's
 /// thread, to start the in-process attach.

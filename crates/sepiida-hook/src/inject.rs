@@ -24,6 +24,7 @@ use std::{
 };
 
 use sepiida_core::shell::{
+    attach_request::AttachRequest,
     hosts::AttachMode,
     protocol::{ATTACH_MESSAGE, MAX_CONNECTION, TAP_CLSID, connection_names},
 };
@@ -52,10 +53,10 @@ static ATTACHING: AtomicBool = AtomicBool::new(false);
 /// shows whether Windows loaded the DLL into Explorer at all.
 static HOOK_SEEN: AtomicBool = AtomicBool::new(false);
 
-/// Asks XAML in process `pid` to load this DLL in `mode`, trying
+/// Asks XAML in process `pid` to load this DLL for `request`, trying
 /// connections from `from` on. Returns the connection number that answered
 /// and its result.
-pub fn initialize(pid: u32, from: u32, mode: AttachMode) -> Result<(u32, HRESULT), HRESULT> {
+pub fn initialize(pid: u32, from: u32, request: &AttachRequest) -> Result<(u32, HRESULT), HRESULT> {
     let Some(path) = module::this_path() else {
         return Err(E_UNEXPECTED);
     };
@@ -64,7 +65,7 @@ pub fn initialize(pid: u32, from: u32, mode: AttachMode) -> Result<(u32, HRESULT
     let mut tried = 0;
     for (number, name) in connection_names(from) {
         tried += 1;
-        let hr = call_on_fresh_thread(initialize, &name, pid, &path, mode);
+        let hr = call_on_fresh_thread(initialize, &name, pid, &path, request);
         if hr == not_found {
             continue;
         }
@@ -109,11 +110,11 @@ fn call_on_fresh_thread(
     connection: &str,
     pid: u32,
     dll: &Path,
-    mode: AttachMode,
+    request: &AttachRequest,
 ) -> HRESULT {
     let connection = HSTRING::from(connection);
     let dll = HSTRING::from(dll.as_os_str());
-    let data = mode.init_data().map(HSTRING::from);
+    let data = request.init_data().map(HSTRING::from);
     let clsid = GUID::from_u128(TAP_CLSID);
     thread::scope(|scope| {
         scope
@@ -138,7 +139,8 @@ fn call_on_fresh_thread(
 }
 
 /// Cross-process attach, called by sepiida.exe after loading this DLL into
-/// itself. `mode` is an `AttachMode` id.
+/// itself. `mode` is an `AttachMode` id; `surface` and `accent` are the
+/// colours to start with, encoded as `AttachRequest::export_colors`.
 ///
 /// # Safety
 /// `connection` must be null or writable.
@@ -147,16 +149,20 @@ pub unsafe extern "system" fn SepiidaInitializeXamlDiagnostics(
     pid: u32,
     from: u32,
     mode: u32,
+    surface: u32,
+    accent: u32,
     connection: *mut u32,
 ) -> HRESULT {
     guard("SepiidaInitializeXamlDiagnostics", E_UNEXPECTED, || {
         if connection.is_null() {
             return E_POINTER;
         }
-        let Some(mode) = AttachMode::from_id(mode) else {
+        let Some(request) = AttachMode::from_id(mode)
+            .and_then(|mode| AttachRequest::from_export(mode, [surface, accent]))
+        else {
             return E_INVALIDARG;
         };
-        match initialize(pid, from, mode) {
+        match initialize(pid, from, &request) {
             Ok((number, hr)) => {
                 // SAFETY: checked non-null above.
                 unsafe { *connection = number };
@@ -225,7 +231,7 @@ fn start_in_process(from: u32) {
             guard("in-process attach thread", (), || {
                 // SAFETY: takes no arguments.
                 let pid = unsafe { GetCurrentProcessId() };
-                if let Err(hr) = initialize(pid, from, AttachMode::Style) {
+                if let Err(hr) = initialize(pid, from, &AttachRequest::default()) {
                     log!("in-process attach failed: {hr}");
                     session::signal_failed();
                 }
