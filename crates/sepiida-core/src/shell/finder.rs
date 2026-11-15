@@ -110,6 +110,11 @@ impl Finder {
         self.tree.path(handle)
     }
 
+    /// The element's parent, if it has one and it is known.
+    pub fn parent(&self, handle: Handle) -> Option<Handle> {
+        self.tree.parent(handle)
+    }
+
     pub fn element_count(&self) -> usize {
         self.tree.len()
     }

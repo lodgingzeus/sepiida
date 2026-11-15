@@ -330,3 +330,72 @@ fn any_of_several_dll_patterns_matches_and_empty_ones_never() {
     );
     assert_eq!(import_slots(&image.bytes, &[""], &wanted), Ok(vec![]));
 }
+
+/// A section header at `index` of a table right after a 240-byte optional
+/// header.
+fn put_section(image: &mut Image, index: usize, rva: u32, size: u32, flags: u32) {
+    let file = OPTIONAL - FILE_HEADER_SIZE;
+    image.put_u16(file + NUMBER_OF_SECTIONS, (index + 1) as u16);
+    image.put_u16(file + SIZE_OF_OPTIONAL_HEADER, 240);
+    let at = OPTIONAL + 240 + index * SECTION_HEADER_SIZE;
+    image.put_u32(at + 8, size);
+    image.put_u32(at + 12, rva);
+    image.put_u32(at + 36, flags);
+}
+
+const DATA: u32 = 0xC000_0040; // initialised data, read, write
+const CODE: u32 = 0xE000_0020; // code, execute, read, write
+const RDATA: u32 = 0x4000_0040; // initialised data, read only
+
+#[test]
+fn stored_pointers_are_found_only_aligned_and_in_writable_data() {
+    let mut image = Image::new();
+    put_section(&mut image, 0, 0x1000, 0x100, CODE);
+    put_section(&mut image, 1, 0x1100, 0x100, RDATA);
+    put_section(&mut image, 2, 0x1200, 0x100, DATA);
+    let (first, second) = (0x7ffa_1234_5000_u64, 0x7ffa_1234_6000_u64);
+    image.put_u64(0x1008, first); // executable: skipped
+    image.put_u64(0x1108, first); // read-only: skipped
+    image.put_u64(0x1210, first);
+    image.put_u64(0x1224, second); // not 8-byte aligned: skipped
+    image.put_u64(0x1238, second);
+    image.put_u64(0x1300, first); // past the section: skipped
+    let slots = stored_slots(&image.bytes, &[first, second]).unwrap();
+    assert_eq!(
+        slots,
+        vec![
+            StoredSlot {
+                rva: 0x1210,
+                target: 0
+            },
+            StoredSlot {
+                rva: 0x1238,
+                target: 1
+            },
+        ]
+    );
+}
+
+#[test]
+fn zero_targets_and_sections_past_the_image_match_nothing() {
+    let mut image = Image::new();
+    put_section(&mut image, 0, 0x1F00, 0x1000, DATA);
+    assert_eq!(stored_slots(&image.bytes, &[0]).unwrap(), vec![]);
+    image.put_u64(0x1FF8, 42);
+    assert_eq!(
+        stored_slots(&image.bytes, &[42]).unwrap(),
+        vec![StoredSlot {
+            rva: 0x1FF8,
+            target: 0
+        }]
+    );
+}
+
+#[test]
+fn a_section_table_past_the_image_is_an_error() {
+    let mut image = Image::new();
+    let file = OPTIONAL - FILE_HEADER_SIZE;
+    image.put_u16(file + NUMBER_OF_SECTIONS, 400);
+    image.put_u16(file + SIZE_OF_OPTIONAL_HEADER, 240);
+    assert_eq!(stored_slots(&image.bytes, &[1]), Err(PeError::Truncated));
+}

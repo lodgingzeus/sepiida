@@ -13,6 +13,11 @@ It works with two wallpaper sources:
 By default sepiida follows Wallpaper Engine when it is running and showing a
 wallpaper, and the Windows wallpaper otherwise.
 
+<p align="center">
+  <img src="docs/screenshots/preview-dark.jpeg" alt="sepiida with a dark wallpaper: File Explorer, Start and quick settings in matching glass" width="420">
+  <img src="docs/screenshots/preview-light.jpeg" alt="sepiida with a light wallpaper: the same surfaces in light glass" width="420">
+</p>
+
 > **Status: early development.** `sepiida apply` sets the Windows accent
 > colour from the current wallpaper, and `sepiidaw.exe` keeps doing so in
 > the background with a tray icon.
@@ -94,6 +99,34 @@ Command-line options override the file. If the file cannot be read,
 sepiida warns and uses the defaults without changing the file. Palettes are
 cached in `%LOCALAPPDATA%\sepiida\palettes.json`, so an image is analysed
 only once.
+
+## First run
+
+sepiida is not code-signed yet (a signing certificate costs money, and the
+project is new). Windows treats any unsigned app from a publisher it has not
+seen before with caution, so the first time you start `sepiidaw.exe` you may
+see this:
+
+<p align="center">
+  <img src="docs/screenshots/warning.jpeg" alt="Windows SmartScreen: Windows protected your PC, with Run anyway and Don't run" width="320">
+</p>
+
+This is SmartScreen saying it does not recognise the publisher, not that it
+found anything in the app. Click **Run anyway** (on some Windows versions,
+**More info** first). Windows remembers the choice for that file.
+
+If **Smart App Control** is on (Windows Security > App & browser control),
+it blocks unsigned apps outright and offers no "Run anyway". sepiida can only
+run with it turned off. On some Windows versions it cannot be turned back on
+without resetting Windows, so decide whether that matters to you first.
+
+If you want to check before running it: the full source is in this
+repository, the Windows builds are made by GitHub Actions from that source
+(see the workflow in `.github/workflows`), and you can build it yourself
+(see Building). sepiida only changes your own user's theme settings and
+styles the shell while it runs; `sepiida restore` puts the original accent
+colour back, and turning styling off or restarting Explorer brings back the
+stock look.
 
 ## Building
 

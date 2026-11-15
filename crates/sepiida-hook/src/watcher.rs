@@ -253,7 +253,8 @@ fn on_change(
         }
         for found in added.matched {
             if let Some(rule) = state.finder.rule(found.rule) {
-                state.styler.found(found, rule);
+                let parent = state.finder.parent(found.handle);
+                state.styler.found(found, rule, parent);
             }
         }
         if state.styler.look_on() {
@@ -373,11 +374,14 @@ pub fn run_command(command: Command) {
     // Outside the borrow: restoring and destroying the window can send
     // messages back to this thread.
     if let Some(state) = detached {
+        // Ended before restoring: the restore changes the tree, and its
+        // callbacks must not set up a fresh state for this attachment.
+        let ended = session::end(control::framework());
         if let Some(mut state) = state {
             state.restore_all();
             backdrop::flush();
         }
-        session::detach(control::framework());
+        session::unadvise(ended);
         control::destroy_window();
     }
 }

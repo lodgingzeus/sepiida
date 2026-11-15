@@ -217,12 +217,12 @@ impl ShellStyling {
         }
     }
 
-    /// Restores and detaches every copy of the DLL in the sandboxed hosts,
-    /// and restores the taskbar and File Explorer's folder windows, if any.
-    /// explorer.exe's copies stay attached: attaching again in the same
-    /// explorer.exe soon after a detach has ended it (turning styling off
-    /// and on again in quick succession), and the next sync finds the copy
-    /// attached and only sends the colours and the look.
+    /// Restores every copy of the DLL: the sandboxed hosts, the taskbar
+    /// and File Explorer's folder windows, if any. All copies stay
+    /// attached: attaching again in the same explorer.exe soon after a
+    /// detach has ended it, and a second attachment in a sandboxed host
+    /// cannot write values. The next sync finds each copy attached and
+    /// only sends the colours and the look.
     pub fn stop(&mut self) {
         self.hosts.stop();
         self.folders.stop();

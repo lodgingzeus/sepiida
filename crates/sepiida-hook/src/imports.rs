@@ -2,7 +2,9 @@
 //! loaded module calls a DLL function is pointed at ours, and pointed back
 //! when we are done. Pure Rust and architecture-neutral (x64 and ARM64),
 //! unlike inline hooks. It only sees calls made through import tables
-//! (normal or delay-load), not through `GetProcAddress`.
+//! (normal or delay-load), not through `GetProcAddress`; for a module
+//! that keeps what `GetProcAddress` gave it in its own writable data,
+//! `patch_stored` swaps those stored pointers the same way.
 //!
 //! Every module is pinned (its reference count raised) while one of its
 //! slots is ours, so a slot is never written after its module unloaded.
@@ -182,6 +184,98 @@ fn patch_module(module: &Module, set: &HookSet, replacements: &[Replacement]) ->
     count
 }
 
+/// A function a module may have stored a pointer to: the real address
+/// (as `GetProcAddress` gives it) and ours.
+pub struct Stored {
+    pub name: &'static str,
+    pub real: usize,
+    pub address: usize,
+}
+
+/// Points every pointer to one of `functions` that a module covered by
+/// `set` stored in its writable data at ours, recorded like an import
+/// slot (put back by `unpatch`). Pointers already ours are no longer
+/// equal to the real address, so calling it again finds only new ones.
+/// Returns the number patched now.
+pub fn patch_stored(set: &HookSet, functions: &[Stored]) -> usize {
+    let own = module::this_module();
+    let targets: Vec<u64> = functions.iter().map(|f| f.real as u64).collect();
+    let mut count = 0;
+    for entry in loaded_modules() {
+        let name = String::from_utf16_lossy(until_nul(&entry.szModule));
+        if Some(entry.hModule) == own || !set.covers(&name) {
+            continue;
+        }
+        let module = Module {
+            name,
+            base: entry.modBaseAddr as usize,
+            size: entry.modBaseSize,
+        };
+        count += patch_stored_in(&module, set, functions, &targets);
+    }
+    count
+}
+
+fn patch_stored_in(module: &Module, set: &HookSet, functions: &[Stored], targets: &[u64]) -> usize {
+    let Some(pinned) = pin(module.base as *const c_void) else {
+        return 0; // unloading
+    };
+    let found = with_image(module.base, module.size, |image| {
+        pe::stored_slots(image, targets).unwrap_or_default()
+    });
+    let mut patches = patches();
+    let mut count = 0;
+    for slot in found {
+        let Some(function) = functions.get(slot.target) else {
+            continue;
+        };
+        let address = module.base + slot.rva as usize;
+        // Read again: the module may have changed it since the scan.
+        let original = read_slot(address);
+        if original != function.real {
+            continue;
+        }
+        let Some(reference) = pin(module.base as *const c_void) else {
+            continue;
+        };
+        if !write_slot(address, function.address) {
+            release(reference);
+            continue;
+        }
+        log!(
+            "imports: {} calls {} through us now (stored pointer at +{:#x})",
+            module.name,
+            function.name,
+            slot.rva
+        );
+        patches.push(Patch {
+            set: set.name,
+            module: reference,
+            slot: address,
+            original,
+            replacement: function.address,
+        });
+        count += 1;
+    }
+    let none_yet = count == 0 && !patches.iter().any(|p| p.set == set.name);
+    drop(patches);
+    if none_yet {
+        log_no_stored(&module.name, set.name);
+    }
+    release(pinned);
+    count
+}
+
+/// Logs once per set that a module keeps no pointer we look for.
+fn log_no_stored(module: &str, set: &'static str) {
+    static NOTED: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    let mut noted = NOTED.lock().unwrap_or_else(|e| e.into_inner());
+    if !noted.contains(&set) {
+        noted.push(set);
+        log!("imports: {module} keeps no stored pointer for {set}");
+    }
+}
+
 /// Points every slot patched for the set named `set` back where it
 /// pointed before, if it is still ours, and releases the modules. Returns
 /// how many there were.
@@ -205,17 +299,25 @@ pub fn is_patched(set: &str) -> bool {
 }
 
 fn import_slots(base: usize, size: u32, dlls: &[&str], names: &[Import]) -> Vec<pe::ImportSlot> {
+    with_image(base, size, |image| {
+        pe::import_slots(image, dlls, names).unwrap_or_default()
+    })
+}
+
+/// Runs `read` on a byte view of the pinned module at `base`; empty if
+/// its headers cannot be read.
+fn with_image<T: Default>(base: usize, size: u32, read: impl FnOnce(&[u8]) -> T) -> T {
     // SAFETY: the module is pinned, so its first page (the headers, always
     // mapped readable) stays mapped while we read it.
     let headers = unsafe { std::slice::from_raw_parts(base as *const u8, 0x400) };
     let Ok(image_size) = pe::image_size(headers) else {
-        return Vec::new();
+        return T::default();
     };
     let length = image_size.min(size) as usize;
     // SAFETY: the loader maps the whole image (SizeOfImage) readable and
     // the module is pinned while the view is used.
     let image = unsafe { std::slice::from_raw_parts(base as *const u8, length) };
-    pe::import_slots(image, dlls, names).unwrap_or_default()
+    read(image)
 }
 
 /// The modules loaded in this process now.
@@ -324,96 +426,4 @@ fn write_slot(slot: usize, value: usize) -> bool {
 pub static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(all(test, windows))]
-mod tests {
-    use windows::{Win32::Graphics::Dwm::DwmFlush, core::HRESULT};
-
-    use super::*;
-
-    const FAKE_ERROR: HRESULT = HRESULT(0x8000_5e91_u32 as i32);
-
-    unsafe extern "system" fn fake_flush() -> HRESULT {
-        FAKE_ERROR
-    }
-
-    fn flush() -> windows::core::Result<()> {
-        // SAFETY: no arguments; DwmFlush only waits for composition.
-        unsafe { DwmFlush() }
-    }
-
-    #[test]
-    fn a_set_skips_implementers_our_dll_and_modules_it_is_not_limited_to() {
-        let gdi = HookSet {
-            name: "test gdi",
-            dlls: &["gdi32"],
-            implementers: &["gdi32", "user32"],
-            only_in: None,
-        };
-        assert!(gdi.covers("ExplorerFrame.dll"));
-        assert!(gdi.covers("comctl32.dll"));
-        assert!(!gdi.covers("GDI32.dll"));
-        assert!(!gdi.covers("gdi32full.dll"));
-        assert!(!gdi.covers("USER32.dll"));
-        assert!(!gdi.covers("Sepiida_Hook.DLL"));
-        let comctl = HookSet {
-            only_in: Some("comctl32.dll"),
-            ..gdi
-        };
-        assert!(comctl.covers("COMCTL32.DLL"));
-        assert!(!comctl.covers("explorerframe.dll"));
-        assert!(!comctl.covers("comctl32.dll.mui"));
-    }
-
-    /// The test executable is this crate's module, so `patch` skips it;
-    /// `patch_module` on it patches a real, linker-made import table.
-    #[test]
-    fn our_own_import_of_dwm_flush_goes_through_the_replacement_and_back() {
-        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let base = module::this_module().unwrap().0 as usize;
-        // SAFETY: our own headers.
-        let headers = unsafe { std::slice::from_raw_parts(base as *const u8, 0x400) };
-        let own = Module {
-            name: "test".into(),
-            base,
-            size: pe::image_size(headers).unwrap(),
-        };
-        let real = flush();
-        let replacement = Replacement {
-            function: Import::Name("DwmFlush"),
-            address: fake_flush as *const () as usize,
-        };
-        let set = |dlls| HookSet {
-            name: "test flush",
-            dlls,
-            implementers: &[],
-            only_in: None,
-        };
-        assert_eq!(
-            patch_module(
-                &own,
-                &set(&["dwmapi_test_only.dll"]),
-                std::slice::from_ref(&replacement)
-            ),
-            0
-        );
-        let patched = patch_module(
-            &own,
-            &set(&["dwmapi.dll"]),
-            std::slice::from_ref(&replacement),
-        );
-        assert!(patched >= 1, "no DwmFlush import found");
-        assert_eq!(flush().unwrap_err().code(), FAKE_ERROR);
-        // Patching again finds the slot already ours.
-        assert_eq!(
-            patch_module(
-                &own,
-                &set(&["dwmapi.dll"]),
-                std::slice::from_ref(&replacement)
-            ),
-            0
-        );
-        assert!(is_patched("test flush"));
-        assert_eq!(unpatch("test flush"), patched);
-        assert!(!is_patched("test flush"));
-        assert_eq!(flush().map_err(|e| e.code()), real.map_err(|e| e.code()));
-    }
-}
+mod tests;

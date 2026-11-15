@@ -160,15 +160,27 @@ fn attach_request(diagnostics: &IXamlDiagnostics) -> AttachRequest {
     AttachRequest::from_init_data(&data.to_string())
 }
 
-/// Stops every active attachment to `framework`'s XAML. Brushes are put
-/// back by the UI thread before it calls this.
+/// Stops every active attachment to `framework`'s XAML.
 pub fn detach(framework: Framework) {
-    let old: Vec<Active> = {
-        let mut active = active();
-        let (old, kept) = active.drain(..).partition(|a| a.framework == framework);
-        *active = kept;
-        old
-    };
+    unadvise(end(framework));
+}
+
+/// Attachments that are no longer current but still watch the tree.
+pub struct Ended(Vec<Active>);
+
+/// Ends every active attachment to `framework`'s XAML: their callbacks
+/// are ignored from now on. They keep watching the tree until passed to
+/// `unadvise`, so the UI thread can put the originals back in between.
+pub fn end(framework: Framework) -> Ended {
+    let mut active = active();
+    let (old, kept) = active.drain(..).partition(|a| a.framework == framework);
+    *active = kept;
+    Ended(old)
+}
+
+/// Stops the ended attachments watching the tree.
+pub fn unadvise(ended: Ended) {
+    let Ended(old) = ended;
     if old.is_empty() {
         return;
     }

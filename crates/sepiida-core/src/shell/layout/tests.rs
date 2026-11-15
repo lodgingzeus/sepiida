@@ -296,3 +296,39 @@ fn text_is_made_by_xaml_and_short_forms_are_spelled_out() {
     assert!(!Value::Text(long).is_valid());
     assert_eq!(Value::Text("Center").to_string(), "Center");
 }
+
+#[test]
+fn a_translation_is_a_held_transform_made_from_markup() {
+    let value = Value::Translate { x: -5.0, y: -566.5 };
+    assert!(value.is_valid());
+    assert_eq!(value.to_string(), "translate -5,-566.5");
+    let current = Current {
+        type_name: "Windows.UI.Xaml.Media.Transform",
+        source: ValueSource::Local,
+        value: "1234",
+    };
+    let write = plan_write(&value, &current).unwrap();
+    assert_eq!(write.restore, Restore::Hold);
+    let Make::Xaml(document) = write.make else {
+        panic!("not made from markup");
+    };
+    assert!(document.contains("<TranslateTransform"));
+    assert!(document.contains("X=\"-5\" Y=\"-566.5\""));
+    let unset = Current {
+        source: ValueSource::Other,
+        ..current
+    };
+    assert_eq!(plan_write(&value, &unset).unwrap().restore, Restore::Clear);
+    assert!(
+        !Value::Translate {
+            x: f32::NAN,
+            y: 0.0
+        }
+        .is_valid()
+    );
+    let brush = Current {
+        type_name: "Windows.UI.Xaml.Media.Brush",
+        ..current
+    };
+    assert!(plan_write(&value, &brush).is_err());
+}

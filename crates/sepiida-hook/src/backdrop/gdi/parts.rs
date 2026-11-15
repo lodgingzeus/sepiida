@@ -27,7 +27,7 @@ use windows::{
     core::{HRESULT, PCSTR, PWSTR, s, w},
 };
 
-use crate::log::log;
+use crate::{imports, log::log};
 
 use super::{
     fill::to_rect,
@@ -47,6 +47,28 @@ type GetThemeClassFn = unsafe extern "system" fn(HTHEME, PWSTR, i32) -> HRESULT;
 fn uxtheme(name: PCSTR) -> Option<unsafe extern "system" fn() -> isize> {
     // SAFETY: looks up a loaded module's export by name or ordinal.
     unsafe { GetProcAddress(GetModuleHandleW(w!("uxtheme.dll")).ok()?, name) }
+}
+
+/// uxtheme's theme-part drawing, for modules that stored pointers to it
+/// instead of importing it (DirectUI draws the file list's column
+/// header and background this way).
+pub(super) fn stored_functions() -> Vec<imports::Stored> {
+    let mut functions = Vec::new();
+    if let Some(real) = real_background() {
+        functions.push(imports::Stored {
+            name: "DrawThemeBackground",
+            real: real as usize,
+            address: draw_background as *const () as usize,
+        });
+    }
+    if let Some(real) = real_background_ex() {
+        functions.push(imports::Stored {
+            name: "DrawThemeBackgroundEx",
+            real: real as usize,
+            address: draw_background_ex as *const () as usize,
+        });
+    }
+    functions
 }
 
 fn real_background() -> Option<DrawBackgroundFn> {

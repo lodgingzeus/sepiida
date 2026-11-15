@@ -163,9 +163,12 @@ static TABLES: LazyLock<AlphaTables> = LazyLock::new(|| {
         let a = i as f32 / 255.0;
         let gamma = 1.2 + 0.3 * a;
         light[i] = (a.powf(1.0 / gamma) * 255.0 + 0.5) as u8;
-        // Dark text is heavy with boosted edges; its most opaque value is
-        // WinUI's light-theme TextFillColorPrimary (#E4000000).
-        dark[i] = (i * 0xe4 / 255) as u8;
+        // Dark text (light mode) goes over a light glass that shows the
+        // wallpaper through, where thin strokes fade: fully opaque at full
+        // coverage and edges boosted more than light text's (inverse
+        // gamma 1.5 to 1.8).
+        let gamma = 1.5 + 0.3 * a;
+        dark[i] = (a.powf(1.0 / gamma) * 255.0 + 0.5) as u8;
     }
     AlphaTables { light, dark }
 });

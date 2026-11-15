@@ -3,7 +3,7 @@
 use sepiida_core::shell::{
     finder::Match,
     held_glass::thins_held,
-    layout::{Current, Make, Restore, Skip, Value, ValueSource, plan_write},
+    layout::{Current, Make, Restore, Skip, Value, ValueSource, plan_write, translate_document},
     markup::{SIZE_PROPERTIES, is_attached},
     rewrites::Rewrites,
 };
@@ -176,6 +176,32 @@ impl Layouts {
                     None => log!("{label} {handle:#x}: no handle for the XAML value"),
                 }
             }
+        }
+    }
+
+    /// Puts a new transform by `x`, `y` where ours is, keeping the original
+    /// recorded when ours was first set (a measured value that changed).
+    pub(super) fn replace_object(&mut self, xaml: &Xaml, found: Match, index: u32, x: f32, y: f32) {
+        let Some(target) = self.targets.get(&found) else {
+            return;
+        };
+        let label = target.label;
+        let made = translate_document(x, y)
+            .and_then(|document| markup::load(&document, xaml.framework))
+            .and_then(|object| xaml.handle_of(&object));
+        let Some(made) = made else {
+            log!("{label} {:#x}: no transform made", found.handle);
+            return;
+        };
+        let hr = xaml.set_property(found.handle, index, made);
+        log!("{label} {:#x}: now translate {x},{y}: {hr}", found.handle);
+        if hr.is_ok()
+            && let Some(applied) = self
+                .targets
+                .get_mut(&found)
+                .and_then(|t| t.applied.as_mut())
+        {
+            applied.ours = made;
         }
     }
 

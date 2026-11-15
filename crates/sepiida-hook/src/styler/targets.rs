@@ -86,17 +86,21 @@ impl Styler {
         }
     }
 
-    /// An element `rule` styles appeared. Paints it if its role has a
-    /// colour.
-    pub fn found(&mut self, found: Match, rule: &'static Rule) {
+    /// An element `rule` styles appeared, below `parent`. Paints it if its
+    /// role has a colour.
+    pub fn found(&mut self, found: Match, rule: &'static Rule, parent: Option<Handle>) {
         if !rule.conditions.is_empty() && !self.meets(found, rule) {
             return;
         }
         let (paint, role) = match rule.effect {
             Effect::Color { paint, role } => (paint, role),
             Effect::Measure(part) => {
-                self.layouts
-                    .measure(&self.xaml, found, rule.label, rule.property, part);
+                self.layouts.measure(
+                    &self.xaml,
+                    found,
+                    (rule.label, rule.property),
+                    (part, parent),
+                );
                 return;
             }
             Effect::Probe => {

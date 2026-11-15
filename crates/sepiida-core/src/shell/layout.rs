@@ -104,6 +104,13 @@ pub enum Value {
         role: Role,
         opacity: f32,
     },
+    /// A `TranslateTransform` by `x`, `y` (`RenderTransform`), worked out
+    /// by a measured layout and made by the DLL from markup. A local
+    /// original is held and put back.
+    Translate {
+        x: f32,
+        y: f32,
+    },
 }
 
 /// Strongest blur accepted (Gaussian standard deviation, in pixels).
@@ -141,6 +148,7 @@ impl Value {
             Self::HorizontalAlignment(_) => ".HorizontalAlignment",
             Self::Visibility(_) => ".Visibility",
             Self::Acrylic(_) | Self::Transparent | Self::Solid(_) | Self::Blur { .. } => ".Brush",
+            Self::Translate { .. } => ".Transform",
             // Any type: XAML says whether the string fits.
             Self::Text(_) | Self::Xaml(_) => "",
         }
@@ -171,6 +179,7 @@ impl Value {
             Self::Blur {
                 amount, opacity, ..
             } => (0.0..=MAX_BLUR).contains(&amount) && (0.0..=1.0).contains(&opacity),
+            Self::Translate { x, y } => fits(x) && fits(y),
         }
     }
 
@@ -191,7 +200,8 @@ impl Value {
             | Self::Transparent
             | Self::Solid(_)
             | Self::Xaml(_)
-            | Self::Blur { .. } => Vec::new(),
+            | Self::Blur { .. }
+            | Self::Translate { .. } => Vec::new(),
             Self::Text(text) => vec![text.to_owned()],
         }
     }
@@ -213,6 +223,9 @@ impl fmt::Display for Value {
                 role,
                 opacity,
             } => write!(f, "blur {amount} with the {role:?} colour at {opacity}"),
+            Self::Translate { x, y } => {
+                write!(f, "translate {},{}", format_number(*x), format_number(*y))
+            }
             _ => f.write_str(&self.candidates().concat()),
         }
     }
@@ -373,6 +386,7 @@ pub fn plan_write(value: &Value, current: &Current<'_>) -> Result<Write, Skip> {
                         | Value::Solid(_)
                         | Value::Xaml(_)
                         | Value::Blur { .. }
+                        | Value::Translate { .. }
                 ) =>
         {
             Restore::Hold
@@ -403,6 +417,7 @@ pub fn plan_write(value: &Value, current: &Current<'_>) -> Result<Write, Skip> {
             opacity,
         },
         Value::Xaml(text) => Make::Xaml(super::markup::document(text).ok_or(Skip::Invalid)?),
+        Value::Translate { x, y } => Make::Xaml(translate_document(x, y).ok_or(Skip::Invalid)?),
         Value::Text(text) => Make::Parse {
             type_name: current.type_name.to_owned(),
             candidates: text_candidates(text, current.type_name),
@@ -413,6 +428,15 @@ pub fn plan_write(value: &Value, current: &Current<'_>) -> Result<Write, Skip> {
         },
     };
     Ok(Write { make, restore })
+}
+
+/// A loadable document for a `TranslateTransform` by `x`, `y`.
+pub fn translate_document(x: f32, y: f32) -> Option<String> {
+    super::markup::document(&format!(
+        "<TranslateTransform X=\"{}\" Y=\"{}\" />",
+        format_number(x),
+        format_number(y)
+    ))
 }
 
 /// The strings to try for a text value: for a thickness or corner radius

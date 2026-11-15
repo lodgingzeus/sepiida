@@ -91,18 +91,39 @@ pub enum Effect {
     /// offset) whenever the look is switched, to learn the geometry a
     /// look must fit. `property` is unused.
     Probe,
-    /// Part of the taskbar's measured layout (`measure`), while the look
-    /// is on.
+    /// Part of a measured layout (`measure`), while the look is on.
     Measure(Part),
 }
 
-/// The elements the taskbar's measured layout reads or sets.
+/// The elements a measured layout reads or sets: values a Windhawk theme
+/// computes from captured sizes (`ActualWidth=>name`, `{{…}}`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Part {
     /// The glass bar behind the buttons: its `Margin` is computed.
     Bar,
     /// The tray panel: its `ActualWidth` is the tray's width.
     Tray,
+    /// The taskbar frame of a centred dock: its `MaxWidth` is computed
+    /// from the width of the grid that holds it (its parent) and the
+    /// tray's.
+    Dock,
+    /// Start's pinned list: its `ActualHeight` places the View button.
+    PinnedList,
+    /// Start's View button: its `RenderTransform` is computed.
+    ViewButton,
+}
+
+impl Part {
+    /// For a part whose value is computed, what it starts as (never
+    /// written before it is worked out); `None` for a part only read.
+    pub const fn placeholder(self) -> Option<Value> {
+        match self {
+            Self::Bar => Some(Value::Thickness([0.0; 4])),
+            Self::Dock => Some(Value::Length(0.0)),
+            Self::ViewButton => Some(Value::Translate { x: 0.0, y: 0.0 }),
+            Self::Tray | Self::PinnedList => None,
+        }
+    }
 }
 
 /// The `x:Name` a rule asks of an element.
@@ -192,6 +213,30 @@ pub(super) type Place = (
     Option<&'static str>,
     Option<&'static str>,
 );
+
+/// A rule that marks an element of a measured layout: read for `part`,
+/// or its `property` computed for it (`Part::placeholder`).
+pub(super) const fn measured(
+    label: &'static str,
+    type_name: &'static str,
+    name: Name,
+    property: &'static str,
+    part: Part,
+) -> Rule {
+    Rule {
+        label,
+        type_name,
+        name,
+        ancestor: None,
+        parent: None,
+        chain: &[],
+        position: None,
+        conditions: &[],
+        material: None,
+        property,
+        effect: Effect::Measure(part),
+    }
+}
 
 /// A look rule: `property` of the element at `place` gets `value` while
 /// the look is on.

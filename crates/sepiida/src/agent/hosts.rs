@@ -1,5 +1,6 @@
 //! Shell styling of the sandboxed hosts, driven by the agent: Start and
-//! quick settings (ShellHost) stay attached while styling is on, and the
+//! quick settings (ShellHost) stay attached while styling is on (and are
+//! only restored, never detached, when it goes off), and the
 //! notification centre, calendar and toasts (ShellExperienceHost) are
 //! attached when one of their windows appears, since their XAML only
 //! exists while shown.
@@ -21,9 +22,11 @@
 //! crash guard, like Explorer does; an exit whose code shows no crash
 //! (Windows ending or restarting the host) is not counted.
 //!
-//! A hidden host attached with the current colours is not attached again:
-//! it picks them up from that attach once shown. Only new colours need a
-//! new attach, as it has no control window to send them to yet.
+//! A host process is attached at most once: a second attachment in the
+//! same process cannot read or write any value (XAML Diagnostics answers
+//! "element not found", seen in quick settings after a wallpaper change and
+//! after styling off and on). A hidden host has no control window yet, so
+//! new colours wait until it is shown; the colours are sent again then.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -81,10 +84,10 @@ pub struct HostStyling {
     granted: bool,
     /// Processes whose exit is being waited for.
     watched: HashSet<u32>,
-    /// Processes attached in this run, with the colours they were attached
-    /// with. One that has no control window yet is hidden, not detached:
-    /// it creates the window once shown.
-    attached: HashMap<u32, Vec<(Role, Color)>>,
+    /// Processes attached in this run, kept until they exit (styling off
+    /// restores them but they stay attached). One that has no control
+    /// window yet is hidden, not detached: it creates the window once shown.
+    attached: HashSet<u32>,
     guards: HashMap<Host, CrashGuard>,
 }
 
@@ -96,7 +99,7 @@ impl HostStyling {
             material: Material::default(),
             granted: false,
             watched: HashSet::new(),
-            attached: HashMap::new(),
+            attached: HashSet::new(),
             guards: HashMap::new(),
         }
     }
@@ -120,7 +123,7 @@ impl HostStyling {
             for process in found {
                 if shell_hook::is_attached(process.pid, Framework::System) {
                     self.send_colors(host, process.pid);
-                } else if KEPT_ATTACHED.contains(&host) && !self.has_current_colors(process.pid) {
+                } else if KEPT_ATTACHED.contains(&host) && !self.attached.contains(&process.pid) {
                     self.attach(host, process.pid, &dll);
                 }
             }
@@ -135,7 +138,7 @@ impl HostStyling {
         }
         if shell_hook::is_attached(pid, Framework::System) {
             self.send_colors(host, pid);
-        } else if self.attached.contains_key(&pid) {
+        } else if self.attached.contains(&pid) {
             // Attached while hidden; its control window comes with the
             // first tree callbacks, before the re-sends below.
             info!(?host, pid, "attached host shown for the first time");
@@ -213,15 +216,14 @@ impl HostStyling {
         (guard.explorer_restarted(at) == Verdict::Disable).then(|| guard.crashes())
     }
 
-    /// Whether `pid` was attached in this run with the colours in use now.
-    fn has_current_colors(&self, pid: u32) -> bool {
-        self.attached.get(&pid) == Some(&self.colors)
-    }
-
-    /// Restores and detaches every copy of the DLL in the sandboxed hosts.
+    /// Restores every copy of the DLL in the sandboxed hosts. They stay
+    /// attached: a second attachment in the same host cannot write any
+    /// value (XAML Diagnostics answers "element not found" for every
+    /// handle it did not hand out to the first), so turning styling off
+    /// and on left quick settings half styled. The next sync finds the
+    /// copy attached and sends the colours and the look again.
     pub fn stop(&mut self) {
         self.colors.clear();
-        self.attached.clear();
         for guard in self.guards.values_mut() {
             guard.reset();
         }
@@ -234,9 +236,9 @@ impl HostStyling {
             return;
         };
         for process in found {
-            match shell_hook::detach_all(process.pid) {
-                Ok(0) => {}
+            match shell_hook::send(process.pid, Framework::System, Command::Restore) {
                 Ok(windows) => info!(host = process.name, windows, "shell styling removed"),
+                Err(ShellHookError::NotAttached) => {}
                 Err(error) => warn!(host = process.name, "could not remove the styling: {error}"),
             }
         }
@@ -252,7 +254,7 @@ impl HostStyling {
             .attached(Instant::now());
         match shell_hook::attach_sandboxed(pid, dll, &self.colors, Duration::ZERO) {
             Ok(attached) => {
-                self.attached.insert(pid, self.colors.clone());
+                self.attached.insert(pid);
                 info!(
                     ?host,
                     pid,

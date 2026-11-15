@@ -4,13 +4,17 @@
 //!   (`rules::glass`) and the inner overlay is clear while it is on; the
 //!   theme's other neutral brushes are kept as written, as variables,
 //!   since we never load inline `:=` XAML;
-//! - the Recommended button is a whole pill (`CornerRadius=15`,
-//!   `BorderThickness=2`): its half-pill joined the View button, which we
-//!   do not move next to it;
+//! - the Recommended button and the View button form one split pill, as
+//!   written (Recommended the left half, View the right), but View takes
+//!   Recommended's clear fill instead of its own solid one, and neither
+//!   half has a rim (the user's choice: the theme's hover rim needs visual
+//!   states, so a rim could only be there all the time);
 //! - captures (`=>`) and `{{…}}` expressions are not supported yet:
 //!   `showMoreSuggestionsVisible` is taken as 0 (Visible, the default), so
 //!   `Visibility={{…}}` is dropped and `{{…*n}}` becomes 0; the View
-//!   button's move by the pinned list's height is left out;
+//!   button's move by the pinned list's height is a measured layout of
+//!   ours (`rules::start`, `measure::view_button_shift`) in place of its
+//!   `RenderTransform` line;
 //! - visual states (`@CommonStates`, `@PointerOver`) are not supported
 //!   yet: those entries keep their normal look as plain setters, without
 //!   the hover colours;
@@ -163,11 +167,11 @@ pub const START: Theme = Theme {
             "Button#ShowMoreSuggestionsButton > Grid > Border",
             &[
                 "Background:=$PillClear",
-                "BorderBrush:=$PillHigh",
+                "BorderBrush=Transparent",
                 "Padding=10,5",
                 "Margin=0,0,-2,0",
-                "CornerRadius=15",
-                "BorderThickness=2",
+                "CornerRadius=15,0,0,15",
+                "BorderThickness=2,2,0,2",
             ],
         ),
         (
@@ -192,8 +196,8 @@ pub const START: Theme = Theme {
         (
             "Microsoft.UI.Xaml.Controls.DropDownButton > Grid",
             &[
-                "BorderBrush:=$PillHigh",
-                "Background:=$PillFill",
+                "BorderBrush=Transparent",
+                "Background:=$PillClear",
                 "BorderThickness=0,2,2,2",
                 "CornerRadius=0,15,15,0",
                 "Height=32",

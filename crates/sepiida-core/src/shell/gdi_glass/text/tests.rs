@@ -91,12 +91,13 @@ fn rect_union_ignores_empty_rects() {
 }
 
 #[test]
-fn light_text_brightens_edges_and_dark_text_tops_out_below_opaque() {
+fn both_text_tables_boost_edges_and_dark_text_more() {
     let light = alpha_table(0x00ff_ffff);
     let dark = alpha_table(0);
     assert_eq!((light[0], light[255]), (0, 255));
     assert!(light[64] > 64, "antialiased edges are brightened");
-    assert_eq!((dark[0], dark[255]), (0, 0xe4));
+    assert_eq!((dark[0], dark[255]), (0, 255));
+    assert!(dark[64] > light[64], "dark text edges are boosted more");
     assert!(light.windows(2).all(|w| w[0] <= w[1]));
     assert!(dark.windows(2).all(|w| w[0] <= w[1]));
 }
@@ -135,7 +136,7 @@ fn the_mask_becomes_premultiplied_text_colour() {
 fn a_short_buffer_is_not_overrun() {
     let mut pixels = [0x00ff_ffff; 5];
     colorize_mask(&mut pixels, 4, 3, 4, 0);
-    assert!(pixels.iter().all(|&p| p >> 24 == 0xe4));
+    assert!(pixels.iter().all(|&p| p >> 24 == 0xff));
     colorize_mask(&mut pixels, 9, 9, 0, 0);
 }
 

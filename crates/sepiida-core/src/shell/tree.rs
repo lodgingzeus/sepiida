@@ -173,6 +173,11 @@ impl ElementTree {
         false
     }
 
+    /// The element's parent, if it has one and it is known.
+    pub fn parent(&self, handle: Handle) -> Option<Handle> {
+        self.elements.get(&handle)?.parent
+    }
+
     /// The element and its known ancestors as `Type#Name < Type#Name < …`,
     /// nearest first, for logs. At most `MAX_PATH_DEPTH` ancestors.
     pub fn path(&self, handle: Handle) -> String {

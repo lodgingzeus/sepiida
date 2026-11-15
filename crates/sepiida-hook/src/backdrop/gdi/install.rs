@@ -46,7 +46,21 @@ const UXTHEME: HookSet = HookSet {
     implementers: &["uxtheme"],
     only_in: None,
 };
-const SETS: [&HookSet; 5] = [&USER32, &GDI, &GDI_COMCTL32, &GDI_EXPLORER_FRAME, &UXTHEME];
+/// DirectUI (the file list, its column header, the status bar) calls
+/// uxtheme's theme-part drawing through pointers it stored, not imports.
+const UXTHEME_DUI_STORED: HookSet = HookSet {
+    name: "gdi uxtheme stored (dui70)",
+    only_in: Some("dui70.dll"),
+    ..UXTHEME
+};
+const SETS: [&HookSet; 6] = [
+    &USER32,
+    &GDI,
+    &GDI_COMCTL32,
+    &GDI_EXPLORER_FRAME,
+    &UXTHEME,
+    &UXTHEME_DUI_STORED,
+];
 /// uxtheme's `DrawTextWithGlow`, exported by ordinal only.
 pub(super) const DRAW_TEXT_WITH_GLOW: u16 = 126;
 
@@ -136,6 +150,7 @@ pub fn install() {
             ),
         ],
     );
+    count += imports::patch_stored(&UXTHEME_DUI_STORED, &parts::stored_functions());
     if count > 0 {
         log!("gdi hooks: {count} import slot(s) hooked");
     }

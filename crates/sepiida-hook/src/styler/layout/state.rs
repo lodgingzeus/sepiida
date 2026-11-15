@@ -176,25 +176,26 @@ impl Layouts {
         }
     }
 
-    /// An element of the measured layout appeared. The frame's margin
-    /// becomes a target written once worked out.
+    /// An element of a measured layout appeared, below `parent`. A part
+    /// whose value is computed becomes a target written once worked out.
     pub fn measure(
         &mut self,
         xaml: &Xaml,
         found: Match,
-        label: &'static str,
-        property: &'static str,
-        part: Part,
+        (label, property): (&'static str, &'static str),
+        (part, parent): (Part, Option<Handle>),
     ) {
         log!("{label} found: {:#x}", found.handle);
-        self.measured.note(found, part);
-        if part == Part::Bar && !self.targets.contains_key(&found) {
+        self.measured.note(found, part, parent);
+        if let Some(placeholder) = part.placeholder()
+            && !self.targets.contains_key(&found)
+        {
             self.targets.insert(
                 found,
                 Target {
                     label,
                     property,
-                    value: Value::Thickness([0.0; 4]),
+                    value: placeholder,
                     material: None,
                     measured: true,
                     ready: false,
@@ -273,9 +274,13 @@ impl Layouts {
         if !self.on {
             return;
         }
-        let Some((found, value)) = self.measured.placement(xaml) else {
-            return;
-        };
+        for (found, value) in self.measured.placements(xaml) {
+            self.place(xaml, found, value);
+        }
+    }
+
+    /// Writes one measured value if it changed.
+    fn place(&mut self, xaml: &Xaml, found: Match, value: Value) {
         let Some(target) = self.targets.get_mut(&found) else {
             return;
         };
@@ -284,6 +289,12 @@ impl Layouts {
         }
         target.value = value;
         target.ready = true;
+        if let Value::Translate { x, y } = value
+            && let Some(index) = target.applied.as_ref().and_then(|a| a.slot.index())
+        {
+            self.replace_object(xaml, found, index, x, y);
+            return;
+        }
         let rewrite = target
             .applied
             .as_ref()
@@ -293,15 +304,24 @@ impl Layouts {
             return;
         };
         // Already ours: only the value changes; the original stays recorded.
-        let Some(created) = value
-            .candidates()
-            .first()
-            .and_then(|c| xaml.create(&type_name, Some(c)))
-        else {
+        let Some(candidate) = value.candidates().into_iter().next() else {
+            return;
+        };
+        let Some(created) = xaml.create(&type_name, Some(&candidate)) else {
             return;
         };
         let hr = xaml.set_property(found.handle, index, created);
         log!("{} {:#x}: now {value}: {hr}", target.label, found.handle);
+        // The size check compares the element with what we wrote last; a
+        // stale number would take our new value for Windows' and fight it.
+        if hr.is_ok()
+            && let Some(applied) = target.applied.as_mut()
+        {
+            applied.ours = created;
+            if applied.size.is_some() {
+                applied.size = candidate.parse::<f64>().ok().map(|n| (n, candidate));
+            }
+        }
     }
 
     /// An element a probe selects appeared.

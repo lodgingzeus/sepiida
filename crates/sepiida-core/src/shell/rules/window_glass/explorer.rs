@@ -1,8 +1,8 @@
 //! WindowGlass for File Explorer's WinUI 3 parts, from Windhawk's Windows 11
 //! File Explorer Styler v1.7.2 (commit `12b5a5c`): a transparent tab strip,
 //! address bar and command bar over the window's backdrop, pill tabs, a
-//! centred command bar without labels, the Home and Gallery pages as an
-//! opaque rounded card, and opaque menus and tooltips (WinUI menus cannot
+//! centred command bar without labels, the Home and Gallery pages as a
+//! rounded card, and opaque menus and tooltips (WinUI menus cannot
 //! be translucent). Target and style lines are copied unchanged except
 //! the navigation row's widths: the theme's fixed 430 px search column and
 //! 180 px margins assume a very wide window and, on a window of about
@@ -11,9 +11,11 @@
 //! columns share the row (search at most 430 px) and the margins are
 //! small. Our variables: the menus and tooltips (the theme's blur and near-opaque
 //! acrylic) take the palette's surface colour as a solid brush, since the
-//! blur brush and our acrylic tint are system-XAML only so far; the border
-//! gradient, the content card and the accent buttons stay as written
-//! (their `ThemeResource`s follow Windows, whose accent sepiida sets).
+//! blur brush and our acrylic tint are system-XAML only so far; the
+//! content card is clear rather than opaque, so the Home and Gallery
+//! pages show the glass as a folder's file list does; the border gradient
+//! and the accent buttons stay as written (their `ThemeResource`s follow
+//! Windows, whose accent sepiida sets).
 //! Entries for elements this build lacks (`NavigationViewItemPresenter`,
 //! `Grid#RootContainer`, `RootCommandSearchGrid`) simply never match; the
 //! two `@VisualState` entries are skipped until visual states work.
@@ -48,12 +50,10 @@ const VARS: &[(&str, Var)] = &[
         ),
     ),
     ("CornerRadius", Var::Text("8")),
-    (
-        "MainContentBG",
-        Var::Xaml(
-            "<SolidColorBrush Color=\"{ThemeResource SystemChromeAltHighColor}\" Opacity=\"1\" />",
-        ),
-    ),
+    // `<SolidColorBrush Color="{ThemeResource SystemChromeAltHighColor}"
+    // Opacity="1"/>`: an opaque card, white or near black. A folder's file
+    // list shows the window glass, so the Home and Gallery pages do too.
+    ("MainContentBG", Var::Transparent),
 ];
 
 pub const EXPLORER: Theme = Theme {

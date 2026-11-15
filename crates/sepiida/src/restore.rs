@@ -25,11 +25,12 @@ pub fn run_cli(dry_run: bool) -> Result<()> {
 
 /// Best effort: no shell process or no DLL attached means nothing to
 /// remove. Covers the taskbar, File Explorer and the sandboxed hosts
-/// (Start, quick settings, the notification centre). explorer.exe's
-/// copies (taskbar, File Explorer) are restored, not detached: attaching
-/// again in the same explorer.exe has ended it.
+/// (Start, quick settings, the notification centre). Every copy is
+/// restored, not detached: attaching again in the same explorer.exe has
+/// ended it, and in a sandboxed host a second attachment cannot write any
+/// value (XAML answers "element not found"), which left quick settings
+/// half styled.
 fn remove_shell_styling() {
-    let mut targets = Vec::new();
     if let Ok(taskbar) = shell_hook::taskbar() {
         match shell_hook::send(taskbar.pid, Framework::System, Command::Restore) {
             Ok(_) => println!("taskbar styling removed"),
@@ -47,15 +48,21 @@ fn remove_shell_styling() {
             }
         }
     }
-    match processes::find_in_session(&SANDBOXED_HOSTS) {
-        Ok(found) => targets.extend(found.into_iter().map(|p| (p.name, p.pid))),
-        Err(error) => eprintln!("warning: could not list the shell processes: {error}"),
-    }
-    for (name, pid) in targets {
-        match shell_hook::detach_all(pid) {
-            Ok(0) => {}
-            Ok(_) => println!("{name} styling removed"),
-            Err(error) => eprintln!("warning: could not remove the {name} styling: {error}"),
+    let found = match processes::find_in_session(&SANDBOXED_HOSTS) {
+        Ok(found) => found,
+        Err(error) => {
+            eprintln!("warning: could not list the shell processes: {error}");
+            return;
+        }
+    };
+    for process in found {
+        match shell_hook::send(process.pid, Framework::System, Command::Restore) {
+            Ok(_) => println!("{} styling removed", process.name),
+            Err(shell_hook::ShellHookError::NotAttached) => {}
+            Err(error) => eprintln!(
+                "warning: could not remove the {} styling: {error}",
+                process.name
+            ),
         }
     }
 }

@@ -1,7 +1,9 @@
 //! Reads the import tables of a loaded 64-bit PE image (PE32+): where the
 //! slots are that hold the addresses of functions imported from a DLL, so
 //! the hook DLL can point some of them at its own functions. Covers normal
-//! and delay-load imports, matched by name or by ordinal.
+//! and delay-load imports, matched by name or by ordinal. Also finds
+//! function addresses a module stored in its own writable data after
+//! looking them up with `GetProcAddress` (`stored_slots`).
 //!
 //! The image is a byte view of the module as the loader mapped it, so
 //! every offset is an RVA. Every read is bounds-checked: a malformed or
@@ -39,6 +41,12 @@ const DOS_MAGIC: u16 = 0x5a4d; // "MZ"
 const NT_SIGNATURE: u32 = 0x0000_4550; // "PE\0\0"
 const PE32_PLUS_MAGIC: u16 = 0x20b;
 const FILE_HEADER_SIZE: usize = 20;
+/// Offsets in the file header, from its start.
+const NUMBER_OF_SECTIONS: usize = 2;
+const SIZE_OF_OPTIONAL_HEADER: usize = 16;
+const SECTION_HEADER_SIZE: usize = 40;
+const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
+const IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
 /// Offsets in the PE32+ optional header.
 const SIZE_OF_IMAGE: usize = 56;
 const NUMBER_OF_RVA_AND_SIZES: usize = 108;
@@ -129,6 +137,66 @@ pub fn import_slots(
         }
     }
     Ok(slots)
+}
+
+/// One stored pointer: the pointer-sized, aligned value at `rva`, in a
+/// writable data section, equal to `targets[target]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoredSlot {
+    pub rva: u32,
+    pub target: usize,
+}
+
+/// Every aligned 8-byte value in `image`'s writable, non-executable
+/// sections that equals one of `targets` (absolute addresses, as the
+/// loaded image holds them). Zero targets are never matched.
+pub fn stored_slots(image: &[u8], targets: &[u64]) -> Result<Vec<StoredSlot>, PeError> {
+    let mut slots = Vec::new();
+    for (start, length) in writable_sections(image)? {
+        let Some(end) = start.checked_add(length) else {
+            continue;
+        };
+        let end = end.min(image.len());
+        // Sections start page-aligned; round up anyway for odd images.
+        let mut at = start.next_multiple_of(8);
+        while at + 8 <= end {
+            if let Some(value) = read_u64(image, at)
+                && value != 0
+                && let Some(target) = targets.iter().position(|&t| t == value)
+                && let Ok(rva) = u32::try_from(at)
+            {
+                slots.push(StoredSlot { rva, target });
+            }
+            at += 8;
+        }
+    }
+    Ok(slots)
+}
+
+/// RVA and in-memory size of each section that is writable and not
+/// executable.
+fn writable_sections(image: &[u8]) -> Result<Vec<(usize, usize)>, PeError> {
+    let optional = optional_header(image)?;
+    let file = optional - FILE_HEADER_SIZE;
+    let count = read_u16(image, file + NUMBER_OF_SECTIONS).ok_or(PeError::Truncated)?;
+    let optional_size =
+        read_u16(image, file + SIZE_OF_OPTIONAL_HEADER).ok_or(PeError::Truncated)?;
+    let table = optional + usize::from(optional_size);
+    let mut sections = Vec::new();
+    for index in 0..usize::from(count) {
+        let at = table + index * SECTION_HEADER_SIZE;
+        let (Some(size), Some(rva), Some(flags)) = (
+            read_u32(image, at + 8),
+            read_u32(image, at + 12),
+            read_u32(image, at + 36),
+        ) else {
+            return Err(PeError::Truncated);
+        };
+        if flags & IMAGE_SCN_MEM_WRITE != 0 && flags & IMAGE_SCN_MEM_EXECUTE == 0 {
+            sections.push((rva as usize, size as usize));
+        }
+    }
+    Ok(sections)
 }
 
 /// Offset of the PE32+ optional header.
