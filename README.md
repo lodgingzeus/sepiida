@@ -1,28 +1,25 @@
 # sepiida
 
-An adaptive theming engine for the Windows shell. sepiida reads your current
-desktop wallpaper, derives a colour palette from it, and applies it to Windows
-itself: accent colour, light/dark mode, taskbar, Start menu and File Explorer.
-Ordinary applications are left alone.
-
-It works with two wallpaper sources:
-
-- the normal Windows wallpaper (picture, slideshow or Windows Spotlight)
-- [Wallpaper Engine](https://www.wallpaperengine.io/), which is optional
-
-By default sepiida follows Wallpaper Engine when it is running and showing a
-wallpaper, and the Windows wallpaper otherwise.
+An adaptive theme for the Windows 11 shell. sepiida takes the colours of
+your desktop wallpaper and dresses Windows in them: the accent colour,
+light or dark mode, and a glass look for the taskbar, Start, quick
+settings and File Explorer. Your other apps are left alone.
 
 <p align="center">
   <img src="docs/screenshots/preview-dark.jpeg" alt="sepiida with a dark wallpaper: File Explorer, Start and quick settings in matching glass" width="420">
   <img src="docs/screenshots/preview-light.jpeg" alt="sepiida with a light wallpaper: the same surfaces in light glass" width="420">
 </p>
 
-> **Status: early development.** `sepiida apply` sets the Windows accent
-> colour from the current wallpaper, and `sepiidaw.exe` keeps doing so in
-> the background with a tray icon.
-> Later versions load a DLL into Windows shell processes; until that is
-> stable, expect it to be able to crash or restart Explorer.
+- Follows the normal Windows wallpaper (picture, slideshow, Spotlight) or
+  [Wallpaper Engine](https://www.wallpaperengine.io/) if you use it.
+- Re-themes on its own whenever the wallpaper changes.
+- Glass or solid surfaces, light or dark, your choice in the settings.
+- Everything can be undone.
+
+> **Early development.** The shell styling works by loading a small DLL
+> into Windows' shell processes. It is tested on Windows 11 25H2, but a bug
+> there can still restart Explorer. Restarting Explorer always brings back
+> the stock look.
 
 ## First run
 
@@ -46,110 +43,52 @@ without resetting Windows, so decide whether that matters to you first.
 
 If you want to check before running it: the full source is in this
 repository, the Windows builds are made by GitHub Actions from that source
-(see the workflow in `.github/workflows`), and you can build it yourself
-(see Building). sepiida only changes your own user's theme settings and
-styles the shell while it runs; `sepiida restore` puts the original accent
-colour back, and turning styling off or restarting Explorer brings back the
-stock look.
+(see `.github/workflows`), and you can build it yourself (see Building).
 
-## Usage
+## Using it
 
-```
-sepiida apply                    set the accent colour from the current wallpaper
-sepiida apply --dry-run          show what would change without changing it
-sepiida apply --source windows   ignore Wallpaper Engine (or: wallpaper-engine, auto)
-sepiida apply --mode dark        also switch Windows to dark (or light) mode
-sepiida run                      stay running and re-theme whenever the wallpaper changes
-sepiida restore                  put back the accent colour you had before sepiida
-sepiida palette image.png        print the palette for an image
-```
+1. Download the build for your PC from the latest
+   [Actions run](../../actions): `sepiida-windows-x64` for most PCs,
+   `sepiida-windows-arm64` for Windows on ARM.
+2. Unzip it into a folder of its own and run `sepiidaw.exe`. A tray icon
+   appears and your theme follows the wallpaper from then on.
+3. Open **Settings** from the tray icon to choose the wallpaper source,
+   light/dark mode, glass or solid, the shell styling, and whether sepiida
+   starts with Windows.
 
-`apply` writes the accent colour to the current user's registry settings and
-turns off "Automatically pick an accent colour from my background", which
-would otherwise overwrite it. Light/dark mode is left alone unless `--mode`
-is given or the settings file asks for it.
+Keep `sepiida.exe`, `sepiidaw.exe` and `sepiida_hook.dll` together. To
+update, unzip the new build into a new folder: Windows keeps the old DLL
+in use until Explorer restarts.
 
-Before it first changes a registry value, `apply` saves the old value in
-`%LOCALAPPDATA%\sepiida\saved-theme.json`. `sepiida restore` puts those
-values back (including "Automatically pick an accent colour") and deletes
-the file. If that file is damaged, `apply` stops rather than overwrite your
-original colours with sepiida's.
+**Undo:** quit sepiida from the tray, or turn the shell styling off in
+Settings, and the stock taskbar, Start and File Explorer come back. To put
+your original accent colour back too, run `sepiida restore` from the same
+folder.
 
-`sepiidaw.exe` is the same program without a console window: started
-with no arguments it runs in the background with a tray icon (a dot in the
-current accent colour) offering Apply now, Pause/Resume, Settings and Quit.
-`sepiida run` does the same from a terminal.
-
-The background agent applies once at startup, then again a moment after the Windows
-wallpaper, the monitor layout, the settings file or the Wallpaper Engine
-wallpaper changes. Once it has seen Wallpaper Engine running, it remembers
-where it is installed, watches its `config.json` and notices when it exits.
-It does not poll for Wallpaper Engine starting; until then, any other
-change (or `sepiida apply`) picks it up. Only one copy
-runs per user session. It logs to `%LOCALAPPDATA%\sepiida\logs\sepiida.log`.
-
-### Taskbar styling (experimental)
-
-```
-sepiida shell attach [--from N]  load sepiida_hook.dll into Explorer and watch the taskbar
-                       [--remote]
-sepiida shell color 336699       paint the taskbar background in this colour (# optional)
-sepiida shell restore            put the original taskbar background back
-sepiida shell detach             restore and stop watching
-```
-
-`attach` loads `sepiida_hook.dll` (from the folder `sepiida.exe` is in) into
-Explorer with a hook on the taskbar's thread, and the DLL then attaches to
-the taskbar through the XAML Diagnostics API. `--remote` makes the XAML
-Diagnostics request from `sepiida.exe` instead. `attach` reports whether the
-DLL is loaded in Explorer and whether it confirmed it is watching. Windows keeps that DLL loaded until
-Explorer restarts, even after `detach`, so the file cannot be replaced while
-Explorer runs: restart Explorer first, or use a new folder. If anything goes
-wrong, restarting Explorer brings back the stock taskbar. The DLL logs to
-`%LOCALAPPDATA%\sepiida\logs\hook.log`.
-
-## Settings
-
-Settings live in `%APPDATA%\sepiida\config.toml`. Every field is optional:
-
-The settings window (`sepiida` with no arguments, or Settings in the tray)
-edits this file and shows the current palette. It can also add sepiida to
-the programs that start when you sign in.
-
-```toml
-source = "auto"          # auto, windows or wallpaper-engine
-mode = "unchanged"       # unchanged, light, dark or follow-wallpaper
-accent = true            # write the Windows accent colour
-locked-color = "#3a6ea5" # use this colour instead of the wallpaper's
-```
-
-Command-line options override the file. If the file cannot be read,
-sepiida warns and uses the defaults without changing the file. Palettes are
-cached in `%LOCALAPPDATA%\sepiida\palettes.json`, so an image is analysed
-only once.
+Settings are kept in `%APPDATA%\sepiida\config.toml`, logs in
+`%LOCALAPPDATA%\sepiida\logs\`. Run `sepiida --help` for the command line.
 
 ## Building
 
-Development happens on Linux with [Nix](https://nixos.org/) and cross-compiles
+Development happens on Linux with [Nix](https://nixos.org/), cross-compiling
 to Windows:
 
 ```sh
 nix develop
 cargo test --workspace
-cargo run -p sepiida -- palette path/to/image.png
 cargo xwin build --workspace --release --target x86_64-pc-windows-msvc
-cargo xwin build --workspace --release --target aarch64-pc-windows-msvc
 ```
 
 The first cross-build downloads the Microsoft CRT and Windows SDK through
-`cargo-xwin`, which means accepting Microsoft's licence terms for them.
+`cargo-xwin`, which means accepting Microsoft's licence terms for them. On
+Windows, install Rust with `rustup` and run `cargo build --release`.
 
-On Windows, install Rust with `rustup` and run `cargo build --release`.
+## Credits
 
-Every push to `main` also builds Windows artifacts in GitHub Actions:
-`sepiida-windows-x64` and `sepiida-windows-arm64`. Use the one that matches
-your Windows: on Windows on ARM, Explorer runs as ARM64 and cannot load the
-x64 styling DLL (`sepiida shell attach` says so if they do not match).
+The shell looks are adapted from themes for
+[Windhawk](https://windhawk.net/)'s styler mods (GPL-3.0): Down Aero
+(Start), BetterControl11 (quick settings), RosePine (taskbar), WindowGlass
+and Matter (File Explorer and popups). The authors are named in the source.
 
 ## Licence
 
