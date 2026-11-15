@@ -13,11 +13,15 @@
 //!   brushes, stop watching and hold no references.
 
 #[cfg(windows)]
+mod backdrop;
+#[cfg(windows)]
 mod control;
 #[cfg(windows)]
 mod dump;
 #[cfg(windows)]
 mod host;
+#[cfg(windows)]
+mod imports;
 #[cfg(windows)]
 mod inject;
 #[cfg(windows)]

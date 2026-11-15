@@ -4,6 +4,7 @@
 //! Left out: `FontFamily` lines (vivo Sans).
 
 use super::edge::{PANEL_EDGE, PANEL_EDGE_THICKNESS};
+use crate::shell::framework::Framework;
 use crate::shell::rules::{
     Role,
     windhawk::{Theme, Var},
@@ -87,6 +88,7 @@ pub(super) const FLYOUT_VARS: &[(&str, Var)] = &[
 ];
 
 pub const FLYOUT_PANELS: Theme = Theme {
+    framework: Framework::System,
     targets: &[
         (
             "Grid#NotificationCenterGrid",
@@ -371,6 +373,7 @@ pub const FLYOUT_PANELS: Theme = Theme {
 ///   and its thumb is the blurred glass itself, a smudge; here a 25 %
 ///   track in the base colour and a white pill.
 pub const FLYOUT_ADDITIONS: Theme = Theme {
+    framework: Framework::System,
     targets: &[
         (
             "Windows.UI.Xaml.Controls.Grid#MediaTransportControlsRegion",

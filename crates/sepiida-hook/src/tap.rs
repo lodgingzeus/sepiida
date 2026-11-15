@@ -1,7 +1,12 @@
 //! The COM objects XAML Diagnostics creates: a class factory, and the
 //! `IObjectWithSite` object ("TAP") whose site is the diagnostics service.
 
-use core::{cell::RefCell, ffi::c_void};
+use core::{
+    cell::{Cell, RefCell},
+    ffi::c_void,
+};
+
+use sepiida_core::shell::framework::Framework;
 
 use windows::{
     Win32::{
@@ -58,6 +63,9 @@ impl IClassFactory_Impl for Factory_Impl {
 #[derive(Default)]
 pub struct Tap {
     site: RefCell<Option<IUnknown>>,
+    /// The framework of the XAML this TAP was attached to, so clearing the
+    /// site ends only that framework's attachments.
+    framework: Cell<Framework>,
 }
 
 impl IObjectWithSite_Impl for Tap_Impl {
@@ -66,10 +74,10 @@ impl IObjectWithSite_Impl for Tap_Impl {
             let site = site.cloned();
             log!("SetSite({})", if site.is_some() { "site" } else { "null" });
             let result = match &site {
-                Some(site) => session::attach(site),
+                Some(site) => session::attach(site).map(|framework| self.framework.set(framework)),
                 None => {
                     log!("site cleared");
-                    session::detach();
+                    session::detach(self.framework.get());
                     Ok(())
                 }
             };

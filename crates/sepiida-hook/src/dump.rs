@@ -9,7 +9,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use sepiida_core::shell::hosts::MAX_DUMPED_ELEMENTS;
+use sepiida_core::shell::{framework::Framework, hosts::MAX_DUMPED_ELEMENTS};
 
 use crate::{
     control,
@@ -25,6 +25,7 @@ static STOPPED: AtomicBool = AtomicBool::new(false);
 /// that cores can be told apart.
 pub fn on_change(
     generation: u64,
+    framework: Framework,
     relation: &ParentChildRelation,
     element: &VisualElement,
     mutation_type: VisualMutationType,
@@ -33,7 +34,7 @@ pub fn on_change(
         return;
     }
     // Lets `sepiida shell dump stop` reach this thread.
-    control::ensure_window();
+    control::ensure_window(framework);
     let n = DUMPED.fetch_add(1, Ordering::AcqRel);
     if n == MAX_DUMPED_ELEMENTS {
         log!("dump stopped after {MAX_DUMPED_ELEMENTS} tree changes");

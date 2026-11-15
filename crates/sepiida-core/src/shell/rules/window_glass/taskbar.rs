@@ -13,6 +13,7 @@
 //! Windows).
 
 use super::edge::{PANEL_EDGE, PANEL_EDGE_THICKNESS};
+use crate::shell::framework::Framework;
 use crate::shell::rules::{
     Role,
     windhawk::{Theme, Var},
@@ -35,6 +36,7 @@ const VARS: &[(&str, Var)] = &[
 ];
 
 pub const TASKBAR: Theme = Theme {
+    framework: Framework::System,
     targets: &[
         (
             "SystemTray.ChevronIconView",
@@ -194,6 +196,7 @@ pub const TASKBAR: Theme = Theme {
 /// glass on the flyout's fill rectangle, with a selector that would also
 /// take the taskbar's own fill; this one takes only the flyout's.
 pub const TASKBAR_ADDITIONS: Theme = Theme {
+    framework: Framework::System,
     targets: &[(
         "Taskbar.TaskbarBackground#HoverFlyoutBackgroundControl > Grid > Rectangle#BackgroundFill",
         &["Fill:=$Background"],

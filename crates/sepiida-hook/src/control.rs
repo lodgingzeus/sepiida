@@ -5,10 +5,17 @@
 //! Any process on the desktop can post to the window, so every message is
 //! decoded strictly (see `shell::protocol::Command::decode`) and anything
 //! else goes to `DefWindowProcW`.
+//!
+//! The title names the framework the thread's XAML is (system XAML or
+//! WinUI 3), so sepiida.exe can address the taskbar's copy and File
+//! Explorer's apart in one explorer.exe.
 
 use std::cell::Cell;
 
-use sepiida_core::shell::protocol::{CONTROL_WINDOW_CLASS, Command, control_window_title};
+use sepiida_core::shell::{
+    framework::Framework,
+    protocol::{CONTROL_WINDOW_CLASS, Command, control_window_title},
+};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -30,18 +37,27 @@ const RELAYOUT_DELAY_MS: u32 = 300;
 
 thread_local! {
     static WINDOW: Cell<Option<HWND>> = const { Cell::new(None) };
+    /// The framework this thread's window serves.
+    static FRAMEWORK: Cell<Framework> = const { Cell::new(Framework::System) };
 }
 
-/// Creates this thread's control window unless it exists.
-pub fn ensure_window() {
+/// The framework this thread's control window serves (system XAML if it
+/// has none).
+pub fn framework() -> Framework {
+    FRAMEWORK.with(Cell::get)
+}
+
+/// Creates this thread's control window for `framework` unless it exists.
+pub fn ensure_window(framework: Framework) {
     if WINDOW.with(Cell::get).is_some() {
         return;
     }
+    FRAMEWORK.with(|f| f.set(framework));
     let Some(instance) = module::this_module().map(HINSTANCE::from) else {
         return;
     };
     let class = HSTRING::from(CONTROL_WINDOW_CLASS);
-    let title = HSTRING::from(control_window_title());
+    let title = HSTRING::from(control_window_title(framework));
     let class_info = WNDCLASSEXW {
         cbSize: size_of::<WNDCLASSEXW>() as u32,
         lpfnWndProc: Some(window_proc),
@@ -71,7 +87,7 @@ pub fn ensure_window() {
     };
     match created {
         Ok(window) => {
-            log!("control window created");
+            log!("control window created ({framework:?} XAML)");
             WINDOW.with(|w| w.set(Some(window)));
         }
         Err(error) => log!("could not create the control window: {error}"),

@@ -10,6 +10,8 @@ use crate::win::process_info::Arch;
 pub enum ShellHookError {
     #[error("the taskbar window was not found; is Explorer running?")]
     NoExplorer,
+    #[error("no File Explorer window is open; open one (Win+E) and try again")]
+    NoExplorerWindow,
     #[error("{0} was not found next to sepiida.exe")]
     MissingDll(PathBuf),
     #[error("could not locate sepiida.exe")]
@@ -18,9 +20,9 @@ pub enum ShellHookError {
     LoadDll(PathBuf, #[source] windows::core::Error),
     #[error("{0} does not export {1}; is it from the same build as sepiida.exe?")]
     MissingExport(PathBuf, &'static str),
-    #[error("could not install the hook on the taskbar thread")]
+    #[error("could not install the hook on the window's thread")]
     Hook(#[source] windows::core::Error),
-    #[error("could not send the attach message to the taskbar")]
+    #[error("could not send the attach message")]
     Trigger(#[source] windows::core::Error),
     #[error(
         "Explorer runs as {} but this build is {}: a DLL can only be loaded into a process \

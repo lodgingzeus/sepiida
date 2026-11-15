@@ -16,6 +16,7 @@ pub const FLYOUT_OVERLAYS: &[Rule] = &[
 #[cfg(test)]
 mod tests {
     use crate::shell::{
+        framework::Framework,
         hosts::Host,
         layout::Value,
         rules::{Effect, Paint, Role, rules_for},
@@ -47,7 +48,7 @@ mod tests {
 
     fn matched(property: &str, effect: Effect) -> Vec<u64> {
         let tree = notification_centre();
-        let mut handles: Vec<u64> = rules_for(Host::ShellExperience)
+        let mut handles: Vec<u64> = rules_for(Host::ShellExperience, Framework::System)
             .iter()
             .filter(|r| r.property == property && r.effect == effect)
             .flat_map(|r| tree.matching(r))
@@ -90,7 +91,7 @@ mod tests {
             "HorizontalThumb",
         );
         tree.add(2, 1, BORDER, "");
-        let looks: Vec<Effect> = rules_for(Host::ShellHost)
+        let looks: Vec<Effect> = rules_for(Host::ShellHost, Framework::System)
             .iter()
             .filter(|r| r.property == "Background" && matches!(r.effect, Effect::Set(_)))
             .filter(|r| !tree.matching(r).is_empty())
@@ -105,8 +106,8 @@ mod tests {
     #[test]
     fn both_flyout_hosts_share_the_set() {
         assert_eq!(
-            rules_for(Host::ShellHost).as_ptr(),
-            rules_for(Host::ShellExperience).as_ptr()
+            rules_for(Host::ShellHost, Framework::System).as_ptr(),
+            rules_for(Host::ShellExperience, Framework::System).as_ptr()
         );
     }
 }

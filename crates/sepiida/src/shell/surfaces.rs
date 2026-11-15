@@ -9,6 +9,7 @@ use std::{thread, time::Duration};
 
 use anyhow::{Result, bail};
 use sepiida_core::shell::{
+    framework::Framework,
     hosts::{Host, SANDBOXED_HOSTS},
     protocol::Command,
 };
@@ -74,22 +75,30 @@ fn report(who: &str, attached: &SandboxAttached) {
     }
 }
 
-/// Sends `command` to every attached copy of the DLL: Explorer's and the
-/// sandboxed hosts'. `Detach` reaches copies of any version.
+/// Sends `command` to every attached copy of the DLL: the taskbar's and
+/// File Explorer's in every explorer.exe (folder windows may run in a
+/// process of their own), and the sandboxed hosts'. `Detach` reaches copies
+/// of any version.
 pub fn broadcast(command: Command) -> Result<()> {
     let mut targets = Vec::new();
-    if let Ok(taskbar) = shell_hook::taskbar() {
-        targets.push((Host::Explorer.exe().to_owned(), taskbar.pid));
+    for process in processes::find_in_session(&[Host::Explorer.exe()])? {
+        for framework in [Framework::System, Framework::WinUi] {
+            targets.push((process.name.clone(), process.pid, framework));
+        }
     }
     for process in processes::find_in_session(&SANDBOXED_HOSTS)? {
-        targets.push((process.name, process.pid));
+        targets.push((process.name, process.pid, Framework::System));
     }
     let mut reached = 0;
-    for (name, pid) in targets {
+    for (name, pid, framework) in targets {
+        let name = match framework {
+            Framework::System => name,
+            Framework::WinUi => format!("{name} File Explorer"),
+        };
         let sent = if command == Command::Detach {
-            shell_hook::detach_all(pid)
+            shell_hook::detach_framework(pid, framework)
         } else {
-            shell_hook::send(pid, command)
+            shell_hook::send(pid, framework, command)
         };
         match sent {
             Ok(0) | Err(ShellHookError::NotAttached) => {}

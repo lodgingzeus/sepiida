@@ -98,6 +98,55 @@ fn the_look_is_written_on_demand_and_put_back() {
     wait_until("Unadvise", || shared.has("Unadvise"));
 }
 
+#[test]
+fn a_value_an_animation_held_is_written_once_it_lets_go() {
+    let _serial = serial();
+    crate::host::tests::pretend_with(sepiida_core::shell::hosts::Host::Explorer, &LOOK);
+    let (shared, site) = new_fake();
+    shared
+        .radius_x_animated
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let tap = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap.SetSite(&site) }.unwrap();
+    let callback = wait_for_callback(&shared);
+    add_taskbar(&callback);
+    let radius_x_set = |shared: &Shared| {
+        shared
+            .calls()
+            .iter()
+            .any(|c| c.starts_with(&format!("SetProperty 0x5 {RADIUS_X_INDEX} ")))
+    };
+
+    send(Command::SetLook(true));
+    assert!(shared.has(&format!("SetProperty 0x5 {MARGIN_INDEX} 0x1000")));
+    assert!(!radius_x_set(&shared), "held by the animation");
+    // Still held: another "look on" tries again and writes nothing.
+    send(Command::SetLook(true));
+    assert!(!radius_x_set(&shared));
+
+    // The animation lets go; the next "look on" (the agent sends one after
+    // a surface is shown) writes it.
+    shared
+        .radius_x_animated
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    send(Command::SetLook(true));
+    assert!(radius_x_set(&shared));
+    // Off puts it back like any other value.
+    send(Command::SetLook(false));
+    assert!(shared.has(&format!("ClearProperty 0x5 {RADIUS_X_INDEX}")));
+    // A visual state is not an animation: RadiusY is never retried.
+    assert!(
+        !shared
+            .calls()
+            .iter()
+            .any(|c| c.starts_with(&format!("SetProperty 0x5 {RADIUS_Y_INDEX} ")))
+    );
+
+    send(Command::Detach);
+    wait_until("Unadvise", || shared.has("Unadvise"));
+}
+
 static GLASS: [Rule; 1] = [look("Background", Value::Acrylic(Role::Surface))];
 
 #[test]

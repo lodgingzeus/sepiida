@@ -8,6 +8,7 @@ mod color;
 pub mod config;
 mod fsio;
 mod palette;
+pub mod pe;
 pub mod schedule;
 pub mod shell;
 pub mod snapshot;

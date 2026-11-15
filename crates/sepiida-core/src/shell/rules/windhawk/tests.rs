@@ -1,5 +1,6 @@
 use super::*;
 use crate::shell::{
+    framework::Framework,
     layout::Value,
     rules::{Effect, Name, Paint, Role, Step},
     tree::ElementTree,
@@ -9,7 +10,7 @@ const GRID: &str = "Windows.UI.Xaml.Controls.Grid";
 const BORDER: &str = "Windows.UI.Xaml.Controls.Border";
 
 fn one(text: &'static str) -> Target {
-    let mut targets = parse_targets(text).unwrap();
+    let mut targets = parse_targets(text, Framework::System).unwrap();
     assert_eq!(targets.len(), 1, "{text}");
     targets.remove(0)
 }
@@ -57,12 +58,15 @@ fn ancestors_are_listed_nearest_first() {
 
 #[test]
 fn commas_split_targets_except_inside_brackets() {
-    let targets =
-        parse_targets("Border#ToastBackgroundBorder, Border#ToastBackgroundBorder2").unwrap();
+    let targets = parse_targets(
+        "Border#ToastBackgroundBorder, Border#ToastBackgroundBorder2",
+        Framework::System,
+    )
+    .unwrap();
     assert_eq!(targets.len(), 2);
     assert_eq!(targets[1].name, Name::Is("ToastBackgroundBorder2"));
     assert_eq!(
-        parse_targets("Grid[AutomationProperties.Name=a,b]"),
+        parse_targets("Grid[AutomationProperties.Name=a,b]", Framework::System),
         Err(SelectorError::Unsupported("[index] or [Property=Value]"))
     );
 }
@@ -87,7 +91,11 @@ fn bad_and_unsupported_selectors_are_reported() {
             SelectorError::Unsupported("[index] or [Property=Value]"),
         ),
     ] {
-        assert_eq!(parse_targets(text), Err(error), "{text:?}");
+        assert_eq!(
+            parse_targets(text, Framework::System),
+            Err(error),
+            "{text:?}"
+        );
     }
 }
 
@@ -146,6 +154,7 @@ const VARS: &[(&str, Var)] = &[
 
 fn effects(target: &'static str, styles: &'static [&'static str]) -> Built {
     let theme = Theme {
+        framework: Framework::System,
         targets: Box::leak(vec![(target, styles)].into_boxed_slice()),
         vars: VARS,
     };
@@ -359,6 +368,7 @@ fn acrylic_and_xaml_variables_are_look_values() {
 #[test]
 fn a_later_line_for_the_same_target_and_property_wins() {
     let theme = Theme {
+        framework: Framework::System,
         targets: &[
             ("Grid#A", &["Width=1", "Height=2"]),
             ("Grid#B", &["Width=3"]),

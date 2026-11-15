@@ -20,7 +20,8 @@ use crate::{
     xamlom::{ISolidColorBrush, InstanceHandle},
 };
 
-const BRUSH_TYPE: &str = "Windows.UI.Xaml.Media.SolidColorBrush";
+/// Below the framework's root namespace.
+const BRUSH_TYPE: &str = "Media.SolidColorBrush";
 const COLOR_TYPE: &str = "Windows.UI.Color";
 
 struct Brush {
@@ -68,7 +69,7 @@ impl SolidBrushes {
             log!("{role:?} brush {brush:#x} refused the colour; creating a new one");
             self.brushes.remove(&role);
         }
-        let Some(handle) = xaml.create(BRUSH_TYPE, None) else {
+        let Some(handle) = xaml.create(&xaml.type_name(BRUSH_TYPE), None) else {
             return false;
         };
         let object = xaml.object(handle);

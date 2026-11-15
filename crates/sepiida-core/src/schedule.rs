@@ -32,6 +32,10 @@ pub enum Event {
     /// surface a new brush, e.g. after a light/dark switch while it was
     /// hidden). Never schedules an apply.
     ShellWindowShown(Host, u32),
+    /// An attach to File Explorer's XAML in this explorer.exe ended, on a
+    /// worker thread (it can take long); `true` if the DLL is now
+    /// attached. Never schedules an apply.
+    ExplorerAttachDone(u32, bool),
     /// The user asked for an apply; skips the wait and ignores a pause.
     ApplyNow,
     Pause,
@@ -100,7 +104,9 @@ impl Scheduler {
                     self.schedule(now);
                 }
             }
-            Event::ShellHostExited(..) | Event::ShellWindowShown(..) => {}
+            Event::ShellHostExited(..)
+            | Event::ShellWindowShown(..)
+            | Event::ExplorerAttachDone(..) => {}
             Event::Quit => return Flow::Quit,
         }
         Flow::Continue
@@ -175,6 +181,8 @@ mod tests {
         // Handled by the agent loop itself; nothing to schedule.
         s.handle(Event::ShellWindowShown(Host::ShellExperience, 42), t0);
         s.handle(Event::ShellHostExited(Host::StartMenu, 7, Some(1), t0), t0);
+        s.handle(Event::ShellWindowShown(Host::Explorer, 9), t0);
+        s.handle(Event::ExplorerAttachDone(9, true), t0);
         assert_eq!(s.deadline(), None);
         s.handle(Event::ExplorerRestarted(t0), t0);
         assert_eq!(s.deadline(), Some(t0 + SETTLE));

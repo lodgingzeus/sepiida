@@ -1,5 +1,6 @@
 //! Getting the DLL attached: in-process through the taskbar thread's hook,
-//! or remotely through its `InitializeXamlDiagnosticsEx` export.
+//! or remotely through its `InitializeXamlDiagnosticsEx` export; and to File
+//! Explorer's WinUI 3 XAML through a folder window thread's hook.
 
 use std::{
     path::{Path, PathBuf},
@@ -7,17 +8,17 @@ use std::{
 };
 
 use sepiida_core::shell::protocol::{
-    ATTACH_MESSAGE, HOOK_PROC_EXPORT, INITIALIZE_EXPORT, MAX_CONNECTION,
+    ATTACH_MESSAGE, ATTACH_WINUI_MESSAGE, HOOK_PROC_EXPORT, INITIALIZE_EXPORT, MAX_CONNECTION,
 };
 use sepiida_core::{
     Color,
-    shell::{attach_request::AttachRequest, hosts::AttachMode, rules::Role},
+    shell::{attach_request::AttachRequest, framework::Framework, hosts::AttachMode, rules::Role},
 };
 use windows::{
     Win32::{
         Foundation::{ERROR_NOT_FOUND, HINSTANCE, HWND, LPARAM, WPARAM},
         UI::WindowsAndMessaging::{
-            FindWindowW, GetWindowThreadProcessId, HOOKPROC, RegisterWindowMessageW,
+            FindWindowExW, FindWindowW, GetWindowThreadProcessId, HOOKPROC, RegisterWindowMessageW,
             SendNotifyMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_CALLWNDPROC,
         },
     },
@@ -26,7 +27,7 @@ use windows::{
 
 use super::{
     ShellHookError,
-    control::{detach_all, wait_for_detach, wait_until_attached},
+    control::{detach_all, detach_framework, wait_for_detach, wait_until_attached},
     library::Library,
     signals::{Outcome, Signals},
 };
@@ -40,6 +41,9 @@ pub const HOOK_DLL: &str = "sepiida_hook.dll";
 /// How long `attach` waits for the DLL to report that it is watching.
 /// Trying many connection numbers from inside Explorer takes a while.
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
+/// The same for File Explorer's WinUI 3 XAML, whose port numbers run much
+/// higher (`Framework::WinUi.max_connection()`).
+const WINUI_READY_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
@@ -96,6 +100,67 @@ pub fn taskbar() -> Result<Taskbar, ShellHookError> {
     }
 }
 
+/// A File Explorer folder window, and the process and thread that own it.
+/// Folder windows may run in their own explorer.exe ("Launch folder
+/// windows in a separate process"), so the pid may not be the taskbar's.
+pub struct ExplorerWindow {
+    window: HWND,
+    pub pid: u32,
+    thread: u32,
+}
+
+/// The first open File Explorer window with the modern (XAML) frame. A
+/// `CabinetWClass` window with a `WorkerW` child is the legacy frame
+/// (Control Panel), which has no XAML.
+pub fn explorer_window() -> Result<ExplorerWindow, ShellHookError> {
+    explorer_windows()
+        .into_iter()
+        .next()
+        .ok_or(ShellHookError::NoExplorerWindow)
+}
+
+/// The first modern-frame folder window of process `pid`.
+pub fn explorer_window_of(pid: u32) -> Result<ExplorerWindow, ShellHookError> {
+    explorer_windows()
+        .into_iter()
+        .find(|w| w.pid == pid)
+        .ok_or(ShellHookError::NoExplorerWindow)
+}
+
+/// The processes that have a modern-frame folder window, each once.
+pub fn explorer_window_pids() -> Vec<u32> {
+    let mut pids: Vec<u32> = explorer_windows().iter().map(|w| w.pid).collect();
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+/// Every open modern-frame folder window, in z-order.
+fn explorer_windows() -> Vec<ExplorerWindow> {
+    let mut found = Vec::new();
+    let mut after = None;
+    // SAFETY: plain Win32 calls with valid arguments; the walk ends when
+    // no further window of the class exists.
+    unsafe {
+        while let Ok(window) = FindWindowExW(None, after, w!("CabinetWClass"), PCWSTR::null()) {
+            after = Some(window);
+            if FindWindowExW(Some(window), None, w!("WorkerW"), PCWSTR::null()).is_ok() {
+                continue;
+            }
+            let mut pid = 0;
+            let thread = GetWindowThreadProcessId(window, Some(&mut pid));
+            if pid != 0 && thread != 0 {
+                found.push(ExplorerWindow {
+                    window,
+                    pid,
+                    thread,
+                });
+            }
+        }
+    }
+    found
+}
+
 /// The hook DLL next to the running executable. Only that file is ever
 /// loaded or handed to Explorer.
 pub fn hook_dll_path() -> Result<PathBuf, ShellHookError> {
@@ -117,9 +182,10 @@ pub fn attach(
     method: Method,
 ) -> Result<Attached, ShellHookError> {
     check_arch(taskbar.pid)?;
-    let replaced = detach_all(taskbar.pid)?;
+    // File Explorer's WinUI 3 copy in the same process stays.
+    let replaced = detach_framework(taskbar.pid, Framework::System)?;
     if replaced > 0 {
-        wait_for_detach(taskbar.pid);
+        wait_for_detach(taskbar.pid, Framework::System);
     }
     let mut loaded_while_hooked = None;
     let mut unhook_error = None;
@@ -147,6 +213,40 @@ pub fn attach(
     })
 }
 
+/// Attaches the DLL to File Explorer's WinUI 3 XAML in `mode`, from inside
+/// the window's process, and waits for it to confirm. Windhawk attaches
+/// once per process and so expects one WinUI 3 port to cover every folder
+/// window (not yet confirmed here). The taskbar's copy in the same process
+/// stays; a style attach first detaches earlier WinUI 3 copies, a dump
+/// sits beside everything. Returns how many copies were replaced, and how
+/// waiting ended.
+pub fn attach_winui(
+    window: &ExplorerWindow,
+    dll: &Path,
+    mode: AttachMode,
+) -> Result<(usize, Outcome), ShellHookError> {
+    check_arch(window.pid)?;
+    let mut replaced = 0;
+    if mode != AttachMode::Dump {
+        replaced = detach_framework(window.pid, Framework::WinUi)?;
+        if replaced > 0 {
+            wait_for_detach(window.pid, Framework::WinUi);
+        }
+    }
+    let signals = Signals::create(window.pid)?;
+    let library = Library::load(dll)?;
+    let hooked = hook_and_send(
+        &library,
+        window.thread,
+        window.window,
+        ATTACH_WINUI_MESSAGE,
+        mode.id(),
+        &signals,
+        WINUI_READY_TIMEOUT,
+    )?;
+    Ok((replaced, hooked.outcome))
+}
+
 struct Hooked {
     outcome: Outcome,
     loaded: ModuleCheck,
@@ -159,6 +259,35 @@ fn attach_in_process(
     from: u32,
     signals: &Signals,
 ) -> Result<Hooked, ShellHookError> {
+    hook_and_send(
+        library,
+        taskbar.thread,
+        taskbar.window,
+        ATTACH_MESSAGE,
+        from,
+        signals,
+        READY_TIMEOUT,
+    )
+}
+
+/// Installs the DLL's hook on `thread` only, sends `window` the registered
+/// `message` with `wparam`, waits up to `timeout` for the DLL's signal,
+/// and removes the hook again.
+fn hook_and_send(
+    library: &Library,
+    thread: u32,
+    window: HWND,
+    message: &str,
+    wparam: u32,
+    signals: &Signals,
+    timeout: Duration,
+) -> Result<Hooked, ShellHookError> {
+    let pid = {
+        let mut pid = 0;
+        // SAFETY: plain Win32 call with a writable out pointer.
+        unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+        pid
+    };
     let proc = library.export(HOOK_PROC_EXPORT)?;
     // SAFETY: the export has the HOOKPROC signature (see the DLL's
     // `SepiidaCallWndProc`).
@@ -168,33 +297,30 @@ fn attach_in_process(
             unsafe extern "system" fn(i32, WPARAM, LPARAM) -> windows::Win32::Foundation::LRESULT,
         >(proc)
     });
-    // SAFETY: the hook is scoped to the taskbar's thread only (never 0,
-    // which would load the DLL into every process on the desktop), and is
-    // removed before returning.
-    let hook = unsafe {
-        SetWindowsHookExW(
-            WH_CALLWNDPROC,
-            proc,
-            Some(HINSTANCE(library.0.0)),
-            taskbar.thread,
-        )
+    if thread == 0 {
+        // 0 would hook every thread on the desktop.
+        return Err(ShellHookError::NoExplorer);
     }
-    .map_err(ShellHookError::Hook)?;
-    let name = HSTRING::from(ATTACH_MESSAGE);
-    // SAFETY: plain Win32 calls; the message is ignored by the taskbar's own
-    // window procedure and only acted on by our hook.
+    // SAFETY: the hook is scoped to one thread of the target (never 0, see
+    // above), and is removed before returning.
+    let hook =
+        unsafe { SetWindowsHookExW(WH_CALLWNDPROC, proc, Some(HINSTANCE(library.0.0)), thread) }
+            .map_err(ShellHookError::Hook)?;
+    let name = HSTRING::from(message);
+    // SAFETY: plain Win32 calls; the message is ignored by the window's own
+    // procedure and only acted on by our hook.
     let sent = unsafe {
         let message = RegisterWindowMessageW(&name);
-        SendNotifyMessageW(taskbar.window, message, WPARAM(from as usize), LPARAM(0))
+        SendNotifyMessageW(window, message, WPARAM(wparam as usize), LPARAM(0))
     };
     // The DLL pins itself inside Explorer before attaching, so the hook can
     // go once the DLL has reported back (or given up).
     let outcome = if sent.is_ok() {
-        signals.wait(READY_TIMEOUT)
+        signals.wait(timeout)
     } else {
         Outcome::Failed
     };
-    let while_hooked = modules::loaded_module(taskbar.pid, HOOK_DLL);
+    let while_hooked = modules::loaded_module(pid, HOOK_DLL);
     // SAFETY: the hook handle from above, removed once.
     let unhook_error = unsafe { UnhookWindowsHookEx(hook) }.err();
     sent.map_err(ShellHookError::Trigger)?;
@@ -275,7 +401,7 @@ pub fn attach_sandboxed(
     check_arch(pid)?;
     let replaced = detach_all(pid)?;
     if replaced > 0 {
-        wait_for_detach(pid);
+        wait_for_detach(pid, Framework::System);
     }
     let library = Library::load(dll)?;
     let mut answered = Vec::new();
@@ -301,7 +427,7 @@ pub fn attach_sandboxed(
     Ok(SandboxAttached {
         replaced,
         answered,
-        confirmed: !timeout.is_zero() && wait_until_attached(pid, timeout),
+        confirmed: !timeout.is_zero() && wait_until_attached(pid, Framework::System, timeout),
     })
 }
 

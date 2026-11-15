@@ -11,6 +11,8 @@
 //!   Diagnostics request comes from sepiida.exe.
 //!
 //! Either way the DLL sets a named event once it watches the visual tree.
+//! File Explorer's WinUI 3 XAML is reached the in-process way only, through
+//! a folder window's thread.
 //!
 //! Only one copy of the DLL may style a process: attaching first asks every
 //! copy already there (any version, any folder) to restore and detach.
@@ -23,8 +25,9 @@ mod signals;
 
 pub use attach::{
     Attached, Method, ModuleCheck, SandboxAttached, Taskbar, attach, attach_dump, attach_sandboxed,
-    hook_dll_path, taskbar,
+    attach_winui, explorer_window, explorer_window_of, explorer_window_pids, hook_dll_path,
+    taskbar,
 };
-pub use control::{detach_all, is_attached, send, wait_until_attached};
+pub use control::{detach_all, detach_framework, is_attached, send, wait_until_attached};
 pub use error::ShellHookError;
 pub use signals::Outcome;

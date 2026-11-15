@@ -38,6 +38,8 @@ taskbar, Start and flyouts\" is on in the settings):
                      its acrylic background gets tinted. notifications (also
                      the calendar and toasts) only exists while open: --delay
                      waits N seconds first, to open it (Win+N)
+  attach explorer    load the styling DLL into File Explorer's WinUI 3 XAML
+                     (open a folder window first); the taskbar's copy stays
   color <rrggbb>     colour every attached surface: the taskbar is painted,
                      the others tinted (`#` optional; PowerShell needs quotes
                      around a leading `#`)
@@ -47,6 +49,9 @@ taskbar, Start and flyouts\" is on in the settings):
   look <on|off>      turn the look (layout and glass) on or off; colours
                      stay. A running agent turns it on again with its next
                      colour update
+  gdi <on|off>       File Explorer only: keep its text readable over the
+                     glass by redrawing GDI text and fills with alpha (on
+                     by default while the glass is on); off for testing
   restore            put the original backgrounds and layout back
   detach             restore and stop watching (the DLL stays loaded until
                      the process restarts)
@@ -56,6 +61,9 @@ taskbar, Start and flyouts\" is on in the settings):
                      N seconds first, to open a flyout (Win+N) before it attaches
   dump taskbar       log the taskbar's element tree (Explorer) into hook.log;
                      quit the tray app first, restart Explorer afterwards
+  dump explorer      log File Explorer's element tree into hook.log; open a
+                     folder window and quit the tray app first, restart
+                     Explorer afterwards
   dump collect       copy those logs into %LOCALAPPDATA%\\sepiida\\logs
   dump stop          stop dumping";
 
@@ -85,12 +93,17 @@ pub enum ShellCommand {
         host: Host,
         delay_secs: u32,
     },
+    /// Attach in style mode to File Explorer's WinUI 3 XAML, through an
+    /// open folder window.
+    AttachExplorer,
     /// The commands below go to every attached process.
     Color(Color),
     /// `None` is Windows' own opacity.
     Opacity(Option<Opacity>),
     /// Turn the look (layout rules) on or off.
     Look(bool),
+    /// Allow or stop File Explorer's GDI alpha redrawing.
+    Gdi(bool),
     Restore,
     Detach,
     Dump(DumpAction),
@@ -117,6 +130,10 @@ pub enum DumpAction {
     /// Attach in dump mode to Explorer, whose taskbar tree goes to
     /// sepiida's own `hook.log` (Explorer is not sandboxed).
     Taskbar,
+    /// Attach in dump mode to File Explorer's WinUI 3 XAML (tabs, address
+    /// bar, command bar, Home, Gallery, details pane), through an open
+    /// folder window; its tree goes to `hook.log` too.
+    Explorer,
     /// Copy the dump logs from the hosts' temp folders to sepiida's logs.
     Collect,
     /// Detach the dumping copies.
@@ -180,9 +197,9 @@ pub enum CliError {
     InvalidValue(String),
     #[error(
         "`shell` takes one of: attach [--from N] [--remote], \
-         attach start|quick-settings|notifications [--delay N], color <rrggbb>, \
-         opacity <0-100|default>, look <on|off>, restore, detach, \
-         dump [--delay N | taskbar | collect | stop]"
+         attach start|quick-settings|notifications [--delay N], attach explorer, color <rrggbb>, \
+         opacity <0-100|default>, look <on|off>, gdi <on|off>, restore, detach, \
+         dump [--delay N | taskbar | explorer | collect | stop]"
     )]
     ShellArguments,
 }
@@ -281,6 +298,7 @@ fn parse_opacity(value: &str) -> Result<Option<Opacity>, CliError> {
 
 fn parse_shell(args: &[&str]) -> Result<ShellCommand, CliError> {
     match args {
+        ["attach", "explorer"] => Ok(ShellCommand::AttachExplorer),
         ["attach", name, options @ ..] if surface(name).is_some() => {
             let host = surface(name).ok_or(CliError::ShellArguments)?;
             let delay_secs = match options {
@@ -307,12 +325,15 @@ fn parse_shell(args: &[&str]) -> Result<ShellCommand, CliError> {
         }
         ["look", "on"] => Ok(ShellCommand::Look(true)),
         ["look", "off"] => Ok(ShellCommand::Look(false)),
+        ["gdi", "on"] => Ok(ShellCommand::Gdi(true)),
+        ["gdi", "off"] => Ok(ShellCommand::Gdi(false)),
         ["restore"] => Ok(ShellCommand::Restore),
         ["detach"] => Ok(ShellCommand::Detach),
         ["dump"] => Ok(ShellCommand::Dump(DumpAction::Start { delay_secs: 0 })),
         ["dump", "--delay", seconds] => parse_delay(seconds)
             .map(|delay_secs| ShellCommand::Dump(DumpAction::Start { delay_secs })),
         ["dump", "taskbar"] => Ok(ShellCommand::Dump(DumpAction::Taskbar)),
+        ["dump", "explorer"] => Ok(ShellCommand::Dump(DumpAction::Explorer)),
         ["dump", "collect"] => Ok(ShellCommand::Dump(DumpAction::Collect)),
         ["dump", "stop"] => Ok(ShellCommand::Dump(DumpAction::Stop)),
         _ => Err(CliError::ShellArguments),

@@ -146,6 +146,9 @@ fn run_loop(
                         agent.styling.host_exited(host, pid, exit_code, at);
                     }
                     Event::ShellWindowShown(host, pid) => agent.styling.window_shown(host, pid),
+                    Event::ExplorerAttachDone(pid, attached) => {
+                        agent.styling.explorer_attach_done(pid, attached);
+                    }
                     _ => {}
                 }
                 if scheduler.handle(event, Instant::now()) == Flow::Quit {

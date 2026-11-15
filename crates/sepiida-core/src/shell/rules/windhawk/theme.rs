@@ -14,6 +14,7 @@ use super::{
     style::{Style, StyleValue, parse_style},
 };
 use crate::shell::{
+    framework::Framework,
     layout::Value,
     rules::{Effect, Paint, Role, Rule},
 };
@@ -47,8 +48,11 @@ pub enum Var {
     Xaml(&'static str),
 }
 
-/// A theme: Windhawk's `ThemeTargetStyles` entries and our variables.
+/// A theme: Windhawk's `ThemeTargetStyles` entries and our variables, for
+/// the elements of one XAML framework (its bare type names are that
+/// framework's).
 pub struct Theme {
+    pub framework: Framework,
     pub targets: &'static [(&'static str, &'static [&'static str])],
     pub vars: &'static [(&'static str, Var)],
 }
@@ -85,7 +89,7 @@ pub fn build_all(themes: &[&Theme]) -> Built {
 
 fn add_theme(built: &mut Built, theme: &Theme) {
     for &(target, styles) in theme.targets {
-        match entry_rules(target, styles, theme.vars) {
+        match entry_rules(target, styles, theme.vars, theme.framework) {
             Ok(rules) => {
                 for rule in rules {
                     built.rules.retain(|kept| !same_slot(kept, &rule));
@@ -113,8 +117,9 @@ fn entry_rules(
     target: &'static str,
     styles: &[&'static str],
     vars: &[(&'static str, Var)],
+    framework: Framework,
 ) -> Result<Vec<Rule>, String> {
-    let targets = parse_targets(target).map_err(|e| e.to_string())?;
+    let targets = parse_targets(target, framework).map_err(|e| e.to_string())?;
     let effects = styles
         .iter()
         .map(|&text| {

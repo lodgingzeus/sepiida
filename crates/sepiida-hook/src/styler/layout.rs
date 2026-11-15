@@ -14,7 +14,7 @@ use sepiida_core::{
     Color,
     shell::{
         finder::Match,
-        layout::{Current, Make, Restore, Value, plan_write},
+        layout::{Current, Make, Restore, Skip, Value, ValueSource, plan_write},
         rules::{Part, Role},
         tint::Opacity,
         tree::Handle,
@@ -39,6 +39,9 @@ struct Target {
     ready: bool,
     /// Set while our value is on the element.
     applied: Option<Applied>,
+    /// An animation or visual state held the property when we tried:
+    /// tried again on tree activity and on every "look on", logged once.
+    held_back: bool,
 }
 
 struct Applied {
@@ -124,6 +127,7 @@ impl Layouts {
                 measured: false,
                 ready: false,
                 applied: None,
+                held_back: false,
             },
         );
         if self.on {
@@ -153,6 +157,7 @@ impl Layouts {
                     measured: true,
                     ready: false,
                     applied: None,
+                    held_back: false,
                 },
             );
         }
@@ -190,6 +195,22 @@ impl Layouts {
                 target.label,
                 found.handle
             );
+        }
+        self.retry_held_back(xaml);
+    }
+
+    /// Tries again where an animation or visual state held the property,
+    /// e.g. the quick settings panel's background, which Windows animates
+    /// on a light/dark switch and may hold until the flyout is shown again.
+    fn retry_held_back(&mut self, xaml: &Xaml) {
+        let waiting: Vec<Match> = self
+            .targets
+            .iter()
+            .filter(|(_, t)| t.held_back && t.applied.is_none())
+            .map(|(&m, _)| m)
+            .collect();
+        for found in waiting {
+            self.apply(xaml, found);
         }
     }
 
@@ -252,8 +273,10 @@ impl Layouts {
     /// back).
     pub fn set_on(&mut self, xaml: &Xaml, on: bool) {
         // The agent sends "on" with every colour update; targets found
-        // while on are styled as they appear, so a repeat has nothing to do.
+        // while on are styled as they appear, so a repeat only retries
+        // those an animation held back.
         if on && self.on {
+            self.retry_held_back(xaml);
             return;
         }
         self.on = on;
@@ -302,10 +325,23 @@ impl Layouts {
         let write = match plan_write(&value, &current) {
             Ok(write) => write,
             Err(skip) => {
-                log!("{label} {handle:#x} left alone: {skip}");
+                let driven = matches!(skip, Skip::Driven(ValueSource::Animation));
+                let first = self
+                    .targets
+                    .get_mut(&found)
+                    .is_none_or(|t| !std::mem::replace(&mut t.held_back, driven));
+                if first {
+                    let later = if driven { "; tried again later" } else { "" };
+                    log!("{label} {handle:#x} left alone: {skip}{later}");
+                }
                 return;
             }
         };
+        if let Some(target) = self.targets.get_mut(&found)
+            && std::mem::take(&mut target.held_back)
+        {
+            log!("{label} {handle:#x}: no longer held; writing {property}");
+        }
         match &write.make {
             Make::Parse {
                 type_name,
@@ -380,7 +416,7 @@ impl Layouts {
             }
             Make::Xaml(document) => {
                 // Held until set: the element keeps its own reference.
-                let Some(object) = markup::load(document) else {
+                let Some(object) = markup::load(document, xaml.framework) else {
                     return;
                 };
                 match xaml.handle_of(&object) {
@@ -456,6 +492,7 @@ impl Layouts {
         };
         // A measured value is worked out afresh next time.
         target.ready = false;
+        target.held_back = false;
         let Some(applied) = target.applied.take() else {
             return;
         };

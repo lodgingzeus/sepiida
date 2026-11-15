@@ -4,6 +4,8 @@
 #[cfg(windows)]
 mod engine_watch;
 #[cfg(windows)]
+mod folders;
+#[cfg(windows)]
 mod hosts;
 #[cfg(windows)]
 mod run;

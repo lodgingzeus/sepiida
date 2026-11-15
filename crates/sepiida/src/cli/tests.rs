@@ -17,6 +17,10 @@ fn shell_commands_parse() {
         }))
     );
     assert_eq!(
+        parse(&["shell", "attach", "explorer"]),
+        Ok(Command::Shell(ShellCommand::AttachExplorer))
+    );
+    assert_eq!(
         parse(&["shell", "attach", "--from", "3"]),
         Ok(Command::Shell(ShellCommand::Attach {
             from: 3,
@@ -70,6 +74,14 @@ fn shell_commands_parse() {
         parse(&["shell", "look", "off"]),
         Ok(Command::Shell(ShellCommand::Look(false)))
     );
+    assert_eq!(
+        parse(&["shell", "gdi", "on"]),
+        Ok(Command::Shell(ShellCommand::Gdi(true)))
+    );
+    assert_eq!(
+        parse(&["shell", "gdi", "off"]),
+        Ok(Command::Shell(ShellCommand::Gdi(false)))
+    );
     for (args, action) in [
         (&["shell", "dump"][..], DumpAction::Start { delay_secs: 0 }),
         (
@@ -77,6 +89,7 @@ fn shell_commands_parse() {
             DumpAction::Start { delay_secs: 10 },
         ),
         (&["shell", "dump", "taskbar"], DumpAction::Taskbar),
+        (&["shell", "dump", "explorer"], DumpAction::Explorer),
         (&["shell", "dump", "collect"], DumpAction::Collect),
         (&["shell", "dump", "stop"], DumpAction::Stop),
     ] {
@@ -90,14 +103,19 @@ fn shell_rejects_bad_arguments() {
         &["shell"][..],
         &["shell", "paint"],
         &["shell", "attach", "now"],
+        &["shell", "attach", "explorer", "--delay", "3"],
         &["shell", "color"],
         &["shell", "color", "#1a2b3c", "extra"],
         &["shell", "dump", "now"],
         &["shell", "dump", "collect", "extra"],
         &["shell", "dump", "taskbar", "extra"],
+        &["shell", "dump", "explorer", "extra"],
         &["shell", "look"],
         &["shell", "look", "yes"],
         &["shell", "look", "on", "extra"],
+        &["shell", "gdi"],
+        &["shell", "gdi", "1"],
+        &["shell", "gdi", "off", "extra"],
     ] {
         assert_eq!(parse(args), Err(CliError::ShellArguments), "{args:?}");
     }

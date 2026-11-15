@@ -3,7 +3,11 @@
 
 use anyhow::{Context, Result};
 use sepiida_core::{
-    shell::hosts::SANDBOXED_HOSTS,
+    shell::{
+        framework::Framework,
+        hosts::{Host, SANDBOXED_HOSTS},
+        protocol::Command,
+    },
     snapshot::{RestoreAction, Snapshot},
 };
 
@@ -20,12 +24,28 @@ pub fn run_cli(dry_run: bool) -> Result<()> {
 }
 
 /// Best effort: no shell process or no DLL attached means nothing to
-/// remove. Covers the taskbar and the sandboxed hosts (Start, quick
-/// settings, the notification centre).
+/// remove. Covers the taskbar, File Explorer and the sandboxed hosts
+/// (Start, quick settings, the notification centre). File Explorer's copy
+/// is restored, not detached: attaching again in the same explorer.exe
+/// has ended it.
 fn remove_shell_styling() {
     let mut targets = Vec::new();
     if let Ok(taskbar) = shell_hook::taskbar() {
-        targets.push(("taskbar".to_owned(), taskbar.pid));
+        match shell_hook::detach_framework(taskbar.pid, Framework::System) {
+            Ok(0) => {}
+            Ok(_) => println!("taskbar styling removed"),
+            Err(error) => eprintln!("warning: could not remove the taskbar styling: {error}"),
+        }
+    }
+    if let Ok(found) = processes::find_in_session(&[Host::Explorer.exe()]) {
+        for process in found {
+            if let Ok(windows) = shell_hook::send(process.pid, Framework::WinUi, Command::Restore) {
+                println!(
+                    "File Explorer styling removed (pid {}, {windows} thread(s))",
+                    process.pid
+                );
+            }
+        }
     }
     match processes::find_in_session(&SANDBOXED_HOSTS) {
         Ok(found) => targets.extend(found.into_iter().map(|p| (p.name, p.pid))),

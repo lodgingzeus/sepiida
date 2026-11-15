@@ -80,10 +80,17 @@ pub(super) struct Shared {
     /// The acrylic brush behind `ACRYLIC`: one object, so its identity
     /// stays the same across calls.
     acrylic: Mutex<Option<SendObject>>,
+    /// One object per plain handle (a brush we created, Explorer's own
+    /// brush), made on first use, so it can be held and found again by
+    /// pointer like a real XAML object.
+    objects: Mutex<HashMap<InstanceHandle, SendObject>>,
     /// The acrylic brush's current tint colour and opacity.
     pub(super) tint: Mutex<Option<(windows::UI::Color, f64)>>,
     /// The acrylic brush's fallback colour; `None` is `WINDOWS_FALLBACK`.
     pub(super) fallback: Mutex<Option<windows::UI::Color>>,
+    /// While set, an animation holds `RadiusX` (as Windows' light/dark
+    /// transition holds the quick settings background).
+    pub(super) radius_x_animated: std::sync::atomic::AtomicBool,
 }
 
 impl Shared {
@@ -257,9 +264,24 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
         // SAFETY: CoTaskMemAlloc'd arrays handed to the caller like XAML
         // does; the caller frees them. Like Explorer's chain, it lists
         // each property with the index `SetProperty` takes, and where its
-        // value comes from: sources 0 style, 1 local, 2 visual state.
+        // value comes from: sources 0 style, 1 local, 2 visual state,
+        // 3 animation.
         unsafe {
-            let source_list = [(3, "Style"), (4, "Local"), (14, "VisualState")];
+            let source_list = [
+                (3, "Style"),
+                (4, "Local"),
+                (14, "VisualState"),
+                (12, "Animation"),
+            ];
+            let radius_x_source = if self
+                .0
+                .radius_x_animated
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                3
+            } else {
+                0
+            };
             let source: *mut PropertyChainSource =
                 CoTaskMemAlloc(size_of::<PropertyChainSource>() * source_list.len()).cast();
             for (i, (id, name)) in source_list.into_iter().enumerate() {
@@ -291,7 +313,7 @@ impl IVisualTreeService_Impl for FakeXaml_Impl {
                     "RadiusX",
                     "Windows.Foundation.Double",
                     "0",
-                    0,
+                    radius_x_source,
                 ),
                 layout_value(
                     RADIUS_Y_INDEX,
@@ -481,10 +503,24 @@ impl IXamlDiagnostics_Impl for FakeXaml_Impl {
             unsafe { *object = brush.into_raw() };
             return S_OK;
         }
-        // Explorer's own brushes; anything else stands for an object the
-        // fake does not model.
+        if self.0.stale.lock().unwrap().contains(&handle) {
+            return ERROR_NOT_FOUND.to_hresult();
+        }
+        // Any other handle: one object per handle, like XAML. The original
+        // brush below has two handles for one object.
         if handle != ORIGINAL_FILL && handle != LIVE_FILL {
-            return E_NOTIMPL;
+            let made = self
+                .0
+                .objects
+                .lock()
+                .unwrap()
+                .entry(handle)
+                .or_insert_with(|| SendObject(Factory.into()))
+                .0
+                .clone();
+            // SAFETY: the DLL passes a writable pointer and takes ownership.
+            unsafe { *object = made.into_raw() };
+            return S_OK;
         }
         // Any COM object stands in for the original brush.
         let brush: IUnknown = Factory.into();
@@ -494,12 +530,22 @@ impl IXamlDiagnostics_Impl for FakeXaml_Impl {
     }
     unsafe fn GetHandleFromIInspectable(
         &self,
-        _: *mut c_void,
+        object: *mut c_void,
         handle: *mut InstanceHandle,
     ) -> HRESULT {
         self.0.record("GetHandleFromIInspectable".into());
+        // An object made for a plain handle keeps that handle; any other
+        // stands for Explorer's original brush.
+        let found = self
+            .0
+            .objects
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, made)| made.0.as_raw() == object)
+            .map(|(&h, _)| h);
         // SAFETY: the DLL passes a writable pointer.
-        unsafe { *handle = LIVE_FILL };
+        unsafe { *handle = found.unwrap_or(LIVE_FILL) };
         S_OK
     }
     unsafe fn HitTest(&self, _: RECT, _: *mut u32, _: *mut *mut InstanceHandle) -> HRESULT {

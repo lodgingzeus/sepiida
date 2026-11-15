@@ -1,7 +1,9 @@
 //! The active style attachments: which diagnostics services we are
-//! watching and with which callback objects. A style attach replaces them
-//! all; a style-alongside attach adds one for a further XAML core of the
-//! process; detaching ends them all. Each attachment gets a new generation
+//! watching and with which callback objects, per XAML framework (in
+//! explorer.exe the taskbar's system XAML and File Explorer's WinUI 3 are
+//! attached separately and never end each other). A style attach replaces
+//! the framework's attachments; a style-alongside attach adds one for a
+//! further XAML core of the process; detaching ends the framework's. Each attachment gets a new generation
 //! number, so callbacks that arrive late for an old one are recognised and
 //! ignored.
 
@@ -21,7 +23,13 @@ use windows::{
     core::{BSTR, HSTRING, IUnknown, Interface, Result},
 };
 
-use sepiida_core::shell::{attach_request::AttachRequest, hosts::AttachMode, protocol};
+use sepiida_core::shell::{
+    attach_request::AttachRequest,
+    carried::Carried,
+    framework::Framework,
+    hosts::AttachMode,
+    protocol::{self, Command},
+};
 
 use crate::{
     dump,
@@ -42,6 +50,9 @@ unsafe impl<T> Send for SendCom<T> {}
 
 struct Active {
     generation: u64,
+    framework: Framework,
+    /// Colours and look sent so far, for XAML threads created later.
+    carried: Carried,
     service: SendCom<IVisualTreeService3>,
     watcher: SendCom<IVisualTreeServiceCallback2>,
 }
@@ -53,6 +64,23 @@ fn active() -> std::sync::MutexGuard<'static, Vec<Active>> {
     ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Records a command sent to an attachment's threads, for threads created
+/// later.
+pub fn record(generation: u64, command: Command) {
+    if let Some(active) = active().iter_mut().find(|a| a.generation == generation) {
+        active.carried.record(command);
+    }
+}
+
+/// What an attachment has been told so far; empty if it is not active.
+pub fn carried(generation: u64) -> Carried {
+    active()
+        .iter()
+        .find(|a| a.generation == generation)
+        .map(|a| a.carried.clone())
+        .unwrap_or_default()
+}
+
 /// Whether callbacks of this generation still belong to an active
 /// attachment.
 pub fn is_current(generation: u64) -> bool {
@@ -60,16 +88,18 @@ pub fn is_current(generation: u64) -> bool {
 }
 
 /// Starts watching the visual tree behind `site` (XAML's
-/// `IXamlDiagnostics`); a style attach first ends every earlier one.
-pub fn attach(site: &IUnknown) -> Result<()> {
+/// `IXamlDiagnostics`); a style attach first ends every earlier one of the
+/// same framework. Returns the framework attached to.
+pub fn attach(site: &IUnknown) -> Result<Framework> {
     let diagnostics: IXamlDiagnostics = site.cast()?;
     let service: IVisualTreeService3 = site.cast()?;
     let request = attach_request(&diagnostics);
     let mode = request.mode;
+    let framework = request.framework;
     // Styling has one attachment; dump attachments (one per XAML core)
     // run side by side and are stopped together (see `dump`).
     match mode {
-        AttachMode::Style => detach(),
+        AttachMode::Style => detach(framework),
         AttachMode::StyleAlongside => {}
         AttachMode::Dump => dump::started(),
     }
@@ -79,7 +109,7 @@ pub fn attach(site: &IUnknown) -> Result<()> {
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     log!(
-        "attaching (generation {generation}, {mode:?} mode, colours {:?}) in {exe}",
+        "attaching (generation {generation}, {mode:?} mode, {framework:?} XAML, colours {:?}) in {exe}",
         request.colors()
     );
     let watcher: IVisualTreeServiceCallback2 =
@@ -87,6 +117,8 @@ pub fn attach(site: &IUnknown) -> Result<()> {
     if mode != AttachMode::Dump {
         active().push(Active {
             generation,
+            framework,
+            carried: Carried::default(),
             service: SendCom(service.clone()),
             watcher: SendCom(watcher.clone()),
         });
@@ -113,7 +145,7 @@ pub fn attach(site: &IUnknown) -> Result<()> {
     if let Err(error) = spawned {
         log!("could not start the advise thread: {error}");
     }
-    Ok(())
+    Ok(framework)
 }
 
 /// What sepiida.exe asked for, passed as the initialisation string.
@@ -128,10 +160,15 @@ fn attach_request(diagnostics: &IXamlDiagnostics) -> AttachRequest {
     AttachRequest::from_init_data(&data.to_string())
 }
 
-/// Stops every active attachment. Brushes are put back by the UI
-/// thread before it calls this.
-pub fn detach() {
-    let old: Vec<Active> = active().drain(..).collect();
+/// Stops every active attachment to `framework`'s XAML. Brushes are put
+/// back by the UI thread before it calls this.
+pub fn detach(framework: Framework) {
+    let old: Vec<Active> = {
+        let mut active = active();
+        let (old, kept) = active.drain(..).partition(|a| a.framework == framework);
+        *active = kept;
+        old
+    };
     if old.is_empty() {
         return;
     }

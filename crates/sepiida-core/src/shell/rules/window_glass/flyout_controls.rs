@@ -4,9 +4,11 @@
 //! a feature, not a look).
 
 use super::flyout_panels::FLYOUT_VARS;
+use crate::shell::framework::Framework;
 use crate::shell::rules::windhawk::Theme;
 
 pub const FLYOUT_CONTROLS: Theme = Theme {
+    framework: Framework::System,
     targets: &[
         (
             "Windows.UI.Xaml.Controls.CalendarViewDayItem > Windows.UI.Xaml.Controls.Border",

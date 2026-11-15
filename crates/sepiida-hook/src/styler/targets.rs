@@ -12,6 +12,7 @@ use sepiida_core::{
     Color,
     shell::{
         finder::Match,
+        framework::Framework,
         rules::{Effect, Paint, Role, Rule},
         tint::Opacity,
         tree::Handle,
@@ -63,9 +64,13 @@ pub struct Styler {
 }
 
 impl Styler {
-    pub fn new(diagnostics: IXamlDiagnostics, service: IVisualTreeService3) -> Self {
+    pub fn new(
+        diagnostics: IXamlDiagnostics,
+        service: IVisualTreeService3,
+        framework: Framework,
+    ) -> Self {
         Self {
-            xaml: Xaml::new(diagnostics, service),
+            xaml: Xaml::new(diagnostics, service, framework),
             colors: HashMap::new(),
             opacities: HashMap::new(),
             solid: SolidBrushes::default(),

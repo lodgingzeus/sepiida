@@ -3,7 +3,10 @@
 //! notification centre's XAML exists only while shown, so the agent
 //! attaches then; and every host may have been given a new brush while
 //! hidden (Windows swaps them on a light/dark switch), so the agent sends
-//! the colours again whenever a window appears.
+//! the colours again whenever a window appears. File Explorer folder
+//! windows (`CabinetWClass` in explorer.exe) are reported too: File
+//! Explorer's XAML only exists once one is open, and each explorer.exe
+//! with one gets attached.
 //!
 //! Out-of-context WinEvent hooks for `EVENT_OBJECT_SHOW` and
 //! `EVENT_OBJECT_UNCLOAKED` (Windows may cloak a flyout's window rather
@@ -21,16 +24,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use sepiida_core::shell::hosts::Host;
+use sepiida_core::shell::{backdrop::FOLDER_WINDOW_CLASS, hosts::Host};
 use tracing::info;
 use windows::Win32::{
     Foundation::HWND,
     UI::{
         Accessibility::{HWINEVENTHOOK, SetWinEventHook},
         WindowsAndMessaging::{
-            CHILDID_SELF, DispatchMessageW, EVENT_OBJECT_SHOW, EVENT_OBJECT_UNCLOAKED, GetMessageW,
-            GetWindowThreadProcessId, MSG, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT,
-            WINEVENT_SKIPOWNPROCESS,
+            CHILDID_SELF, DispatchMessageW, EVENT_OBJECT_SHOW, EVENT_OBJECT_UNCLOAKED,
+            GetClassNameW, GetMessageW, GetWindowThreadProcessId, MSG, OBJID_WINDOW,
+            WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
         },
     },
 };
@@ -55,7 +58,8 @@ pub enum FlyoutEventsError {
 
 struct Watch {
     on_shown: Box<dyn Fn(Host, u32)>,
-    /// Which sandboxed host each process id seen is, if any.
+    /// Which sandboxed host (or explorer.exe) each process id seen is, if
+    /// any.
     known: HashMap<u32, Option<Host>>,
     last: Option<(u32, Instant)>,
 }
@@ -65,8 +69,8 @@ thread_local! {
 }
 
 /// Starts the hook thread; `on_shown` runs on it with the host and process
-/// id each time a sandboxed host shows a window. Returns once the hook is
-/// in.
+/// id each time a sandboxed host shows a window, or explorer.exe a folder
+/// window. Returns once the hook is in.
 pub fn spawn(on_shown: impl Fn(Host, u32) + Send + 'static) -> Result<(), FlyoutEventsError> {
     let (ready_tx, ready_rx) = mpsc::channel();
     thread::Builder::new()
@@ -137,12 +141,21 @@ unsafe extern "system" fn on_event(
         // SAFETY: plain call; `pid` is writable.
         unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
         if pid != 0 {
-            shown(pid, event);
+            shown(window, pid, event);
         }
     });
 }
 
-fn shown(pid: u32, event: u32) {
+/// Whether `window` is a File Explorer folder window.
+fn is_folder_window(window: HWND) -> bool {
+    let mut class = [0u16; 32];
+    // SAFETY: a window handle from the event; the buffer is ours.
+    let length = unsafe { GetClassNameW(window, &mut class) };
+    let length = usize::try_from(length).unwrap_or(0).min(class.len());
+    String::from_utf16_lossy(&class[..length]) == FOLDER_WINDOW_CLASS
+}
+
+fn shown(window: HWND, pid: u32, event: u32) {
     WATCH.with(|cell| {
         let Ok(mut slot) = cell.try_borrow_mut() else {
             return;
@@ -156,11 +169,15 @@ fn shown(pid: u32, event: u32) {
         let host = *watch.known.entry(pid).or_insert_with(|| {
             processes::exe_name(pid)
                 .and_then(|name| Host::from_exe(&name))
-                .filter(|host| host.is_sandboxed())
+                .filter(|host| host.is_sandboxed() || *host == Host::Explorer)
         });
         let Some(host) = host else {
             return;
         };
+        // explorer.exe shows the taskbar, menus and more: folder windows only.
+        if host == Host::Explorer && !is_folder_window(window) {
+            return;
+        }
         let now = Instant::now();
         if watch
             .last

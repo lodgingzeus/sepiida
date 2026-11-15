@@ -7,7 +7,7 @@
 //! parses a buffer from another process; every `(message, wParam)` pair
 //! either decodes to a command or is ignored.
 
-use super::{rules::Role, tint::Opacity};
+use super::{framework::Framework, rules::Role, tint::Opacity};
 use crate::Color;
 
 /// Class ID of the DLL's `IObjectWithSite` object, passed to
@@ -23,18 +23,33 @@ pub const CONTROL_WINDOW_CLASS: &str = "sepiida.hook.control";
 /// except `Detach`, which every version understands.
 pub const PROTOCOL_VERSION: u32 = 5;
 
-/// Title of a control window speaking `PROTOCOL_VERSION`.
-pub fn control_window_title() -> String {
-    format!("{CONTROL_WINDOW_CLASS} v{PROTOCOL_VERSION}")
+/// Ends the title of a control window that serves WinUI 3 (File Explorer),
+/// so the taskbar's copy and Explorer's, in one process, are told apart.
+const WINUI_TITLE_MARK: &str = " winui";
+
+/// Title of a control window speaking `PROTOCOL_VERSION` for `framework`.
+pub fn control_window_title(framework: Framework) -> String {
+    let mark = match framework {
+        Framework::System => "",
+        Framework::WinUi => WINUI_TITLE_MARK,
+    };
+    format!("{CONTROL_WINDOW_CLASS} v{PROTOCOL_VERSION}{mark}")
+}
+
+/// The framework a control window of any version serves, from its title.
+/// Versions before WinUI 3 support only ever served system XAML.
+pub fn title_framework(title: &str) -> Framework {
+    if title.ends_with(WINUI_TITLE_MARK) {
+        Framework::WinUi
+    } else {
+        Framework::System
+    }
 }
 
 /// System XAML names each XAML thread's diagnostics port
 /// `VisualDiagConnection<N>`, counting up as threads are created over the
 /// life of the process, so the number is not known in advance.
-pub const CONNECTION_PREFIX: &str = "VisualDiagConnection";
-/// Connection numbers tried before giving up. Explorer creates few XAML
-/// threads; the taskbar's is among the first.
-pub const MAX_CONNECTION: u32 = 256;
+pub use super::framework::MAX_CONNECTION;
 
 /// Connection numbers a style-alongside attach tries past the one before
 /// it. Numbers count up with every XAML thread ever created, so further
@@ -44,8 +59,9 @@ pub const ALONGSIDE_SPAN: usize = 8;
 
 /// Every connection name to try from number `from` on, in order. A `from`
 /// of 0 counts as 1.
+/// System XAML's; see `Framework::connection_names` for WinUI 3.
 pub fn connection_names(from: u32) -> impl Iterator<Item = (u32, String)> {
-    (from.max(1)..=MAX_CONNECTION).map(|n| (n, format!("{CONNECTION_PREFIX}{n}")))
+    Framework::System.connection_names(from)
 }
 
 /// DLL export that calls `InitializeXamlDiagnosticsEx` for a process:
@@ -62,6 +78,10 @@ pub const HOOK_PROC_EXPORT: &str = "SepiidaCallWndProc";
 /// Registered window message sent to the taskbar window to trigger the
 /// in-process attach; `wParam` is the first connection number to try.
 pub const ATTACH_MESSAGE: &str = "sepiida.hook.attach";
+/// Registered window message sent to a File Explorer window to trigger an
+/// in-process attach to its WinUI 3 XAML; `wParam` is an `AttachMode` id.
+/// The hook procedure is installed on that window's thread only.
+pub const ATTACH_WINUI_MESSAGE: &str = "sepiida.hook.attach-winui";
 
 /// Named event the DLL sets once it is watching the visual tree. Per
 /// session (`Local\`) and per target process.
@@ -86,6 +106,7 @@ const MSG_DETACH: u32 = WM_APP + 0x5e3;
 const MSG_SET_COLOR: u32 = WM_APP + 0x5e4;
 const MSG_SET_TINT_OPACITY: u32 = WM_APP + 0x5e5;
 const MSG_SET_LOOK: u32 = WM_APP + 0x5e6;
+const MSG_SET_GDI_ALPHA: u32 = WM_APP + 0x5e7;
 /// `SetTintOpacity`'s value byte for "Windows' own opacity".
 const OPACITY_ORIGINAL: usize = 0xff;
 
@@ -99,6 +120,10 @@ pub enum Command {
     /// Turn the look rules (layout) on or off; off puts the original
     /// values back. Colours are not affected.
     SetLook(bool),
+    /// Allow or stop the GDI redrawing that keeps File Explorer's text
+    /// readable over its glass (on by default while the glass is on). For
+    /// the whole process, not one thread.
+    SetGdiAlpha(bool),
     /// Put back the original brushes and layout and keep watching.
     Restore,
     /// Put back the original brushes and stop watching. The DLL stays
@@ -123,6 +148,7 @@ impl Command {
                     | opacity.map_or(OPACITY_ORIGINAL, |o| usize::from(o.percent())),
             ),
             Self::SetLook(on) => (MSG_SET_LOOK, usize::from(on)),
+            Self::SetGdiAlpha(on) => (MSG_SET_GDI_ALPHA, usize::from(on)),
             Self::Restore => (MSG_RESTORE, 0),
             Self::Detach => (MSG_DETACH, 0),
         }
@@ -147,6 +173,7 @@ impl Command {
                 Some(Self::SetTintOpacity(role, opacity))
             }
             (MSG_SET_LOOK, w) if w <= 1 => Some(Self::SetLook(w == 1)),
+            (MSG_SET_GDI_ALPHA, w) if w <= 1 => Some(Self::SetGdiAlpha(w == 1)),
             (MSG_RESTORE, 0) => Some(Self::Restore),
             (MSG_DETACH, 0) => Some(Self::Detach),
             _ => None,
@@ -174,6 +201,8 @@ mod tests {
             Command::SetTintOpacity(Role::Surface, None),
             Command::SetLook(true),
             Command::SetLook(false),
+            Command::SetGdiAlpha(true),
+            Command::SetGdiAlpha(false),
             Command::Restore,
             Command::Detach,
         ] {
@@ -200,6 +229,9 @@ mod tests {
         assert_eq!(Command::decode(restore, 1), None);
         let (look, _) = Command::SetLook(true).encode();
         assert_eq!(Command::decode(look, 2), None);
+        let (gdi, _) = Command::SetGdiAlpha(true).encode();
+        assert_ne!(gdi, look);
+        assert_eq!(Command::decode(gdi, 2), None);
         assert_eq!(Command::decode(detach, 1), None);
         assert_eq!(Command::decode(WM_APP, 0), None);
         assert_eq!(Command::decode(0x0010, 0), None); // WM_CLOSE
@@ -230,7 +262,27 @@ mod tests {
 
     #[test]
     fn the_control_window_title_carries_the_version() {
-        assert_eq!(control_window_title(), "sepiida.hook.control v5");
+        assert_eq!(
+            control_window_title(Framework::System),
+            "sepiida.hook.control v5"
+        );
+        assert_eq!(
+            control_window_title(Framework::WinUi),
+            "sepiida.hook.control v5 winui"
+        );
+    }
+
+    #[test]
+    fn titles_name_their_framework() {
+        for framework in [Framework::System, Framework::WinUi] {
+            assert_eq!(title_framework(&control_window_title(framework)), framework);
+        }
+        // Older versions, and anything unexpected, are system XAML.
+        assert_eq!(
+            title_framework("sepiida.hook.control v4"),
+            Framework::System
+        );
+        assert_eq!(title_framework(""), Framework::System);
     }
 
     #[test]

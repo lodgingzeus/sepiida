@@ -1,6 +1,7 @@
-//! Which rule set each shell process uses, and the checks every set must
-//! pass. Sets with Windhawk theme lines are built once per process, on
-//! first use.
+//! Which rule set each shell process uses, per XAML framework, and the
+//! checks every set must pass. Sets with Windhawk theme lines are built
+//! once per process, on first use. Only explorer.exe has WinUI 3 rules
+//! (File Explorer); every other host's WinUI 3 set is empty.
 
 use std::sync::OnceLock;
 
@@ -11,10 +12,11 @@ use super::{
     taskbar::TASKBAR_RULES,
     windhawk::{Skipped, Theme, build_all},
     window_glass::{
-        FLYOUT_ADDITIONS, FLYOUT_CONTROLS, FLYOUT_PANELS, START, TASKBAR, TASKBAR_ADDITIONS,
+        EXPLORER, FLYOUT_ADDITIONS, FLYOUT_CONTROLS, FLYOUT_PANELS, START, TASKBAR,
+        TASKBAR_ADDITIONS,
     },
 };
-use crate::shell::hosts::Host;
+use crate::shell::{framework::Framework, hosts::Host};
 
 struct RuleSet {
     rules: Vec<Rule>,
@@ -54,22 +56,34 @@ fn flyouts() -> &'static RuleSet {
     })
 }
 
-fn set_for(host: Host) -> &'static RuleSet {
-    match host {
-        Host::Explorer => taskbar(),
-        Host::StartMenu => start(),
-        Host::ShellHost | Host::ShellExperience => flyouts(),
+fn file_explorer() -> &'static RuleSet {
+    static SET: OnceLock<RuleSet> = OnceLock::new();
+    SET.get_or_init(|| RuleSet::new(&[], &[&EXPLORER]))
+}
+
+fn empty() -> &'static RuleSet {
+    static SET: OnceLock<RuleSet> = OnceLock::new();
+    SET.get_or_init(|| RuleSet::new(&[], &[]))
+}
+
+fn set_for(host: Host, framework: Framework) -> &'static RuleSet {
+    match (host, framework) {
+        (Host::Explorer, Framework::System) => taskbar(),
+        (Host::Explorer, Framework::WinUi) => file_explorer(),
+        (Host::StartMenu, Framework::System) => start(),
+        (Host::ShellHost | Host::ShellExperience, Framework::System) => flyouts(),
+        (_, Framework::WinUi) => empty(),
     }
 }
 
-/// The rule set for elements in `host`.
-pub fn rules_for(host: Host) -> &'static [Rule] {
-    &set_for(host).rules
+/// The rule set for `framework`'s elements in `host`.
+pub fn rules_for(host: Host, framework: Framework) -> &'static [Rule] {
+    &set_for(host, framework).rules
 }
 
-/// Theme entries left out of `host`'s rule set, and why; for the log.
-pub fn skipped_for(host: Host) -> &'static [Skipped] {
-    &set_for(host).skipped
+/// Theme entries left out of that rule set, and why; for the log.
+pub fn skipped_for(host: Host, framework: Framework) -> &'static [Skipped] {
+    &set_for(host, framework).skipped
 }
 
 #[cfg(test)]
@@ -91,7 +105,11 @@ mod tests {
     }
 
     fn skipped(host: Host) -> Vec<(&'static str, &'static str)> {
-        skipped_for(host)
+        skipped_in(host, Framework::System)
+    }
+
+    fn skipped_in(host: Host, framework: Framework) -> Vec<(&'static str, &'static str)> {
+        skipped_for(host, framework)
             .iter()
             .map(|s| {
                 let feature = KNOWN_GAPS
@@ -140,7 +158,7 @@ mod tests {
     #[test]
     fn every_host_has_rules_and_something_to_paint() {
         for host in Host::ALL {
-            let rules = rules_for(host);
+            let rules = rules_for(host, Framework::System);
             assert!(
                 rules
                     .iter()
@@ -155,7 +173,7 @@ mod tests {
     #[test]
     fn surfaces_are_tinted_and_only_cards_are_solid() {
         for host in Host::ALL {
-            for rule in rules_for(host) {
+            for rule in rules_for(host, Framework::System) {
                 if let Effect::Color { paint, role } = rule.effect {
                     let card = role == Role::SurfaceRaised;
                     assert_eq!(paint == Paint::Solid, card, "{host:?}: {}", rule.label);
@@ -164,10 +182,43 @@ mod tests {
         }
     }
 
+    /// Every rule set that has rules: each host's system XAML set, and
+    /// File Explorer's.
+    fn every_set() -> Vec<(Host, Framework)> {
+        let mut sets: Vec<_> = Host::ALL.map(|h| (h, Framework::System)).to_vec();
+        sets.push((Host::Explorer, Framework::WinUi));
+        sets
+    }
+
+    #[test]
+    fn file_explorer_has_winui_rules_and_no_other_host_does() {
+        let rules = rules_for(Host::Explorer, Framework::WinUi);
+        assert!(rules.len() > 50, "{}", rules.len());
+        // Bare type names became WinUI 3 names; the one system XAML type
+        // is written out in the theme (it never matches in Explorer).
+        for rule in rules {
+            let winui = rule.type_name.starts_with("Microsoft.UI.Xaml.")
+                || rule.type_name.starts_with("FileExplorerExtensions.");
+            assert!(
+                winui || rule.label.contains("RootCommandSearchGrid"),
+                "{}",
+                rule.label
+            );
+        }
+        for host in [Host::StartMenu, Host::ShellHost, Host::ShellExperience] {
+            assert!(rules_for(host, Framework::WinUi).is_empty(), "{host:?}");
+        }
+        let left_out: Vec<_> = skipped_in(Host::Explorer, Framework::WinUi)
+            .into_iter()
+            .map(|(_, feature)| feature)
+            .collect();
+        assert_eq!(left_out, ["@VisualState", "@VisualState"]);
+    }
+
     #[test]
     fn no_two_rules_of_a_host_change_the_same_property_of_an_element() {
-        for host in Host::ALL {
-            let rules = rules_for(host);
+        for (host, framework) in every_set() {
+            let rules = rules_for(host, framework);
             for (i, a) in rules.iter().enumerate() {
                 for b in &rules[i + 1..] {
                     assert!(
@@ -188,8 +239,8 @@ mod tests {
     #[test]
     fn every_look_value_is_valid() {
         let mut looks = 0;
-        for host in Host::ALL {
-            for rule in rules_for(host) {
+        for (host, framework) in every_set() {
+            for rule in rules_for(host, framework) {
                 if let Effect::Set(value) = rule.effect {
                     assert!(value.is_valid(), "{}", rule.label);
                     looks += 1;

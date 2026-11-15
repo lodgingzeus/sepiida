@@ -11,6 +11,10 @@
 //! the DLL writes to sepiida's own `hook.log`. Explorer allows one XAML
 //! diagnostics consumer per core, so a dump there may take the place of the
 //! styling copy: the user quits the agent first and restarts Explorer after.
+//!
+//! `dump explorer` dumps File Explorer's WinUI 3 XAML, a separate
+//! framework with its own port, so it sits beside the taskbar's styling
+//! copy. It goes through an open folder window's thread.
 
 use std::{
     fs,
@@ -21,7 +25,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use directories::BaseDirs;
-use sepiida_core::shell::hosts::{FALLBACK_LOG_FILE, SANDBOXED_HOSTS};
+use sepiida_core::shell::hosts::{AttachMode, FALLBACK_LOG_FILE, SANDBOXED_HOSTS};
 
 use crate::{
     cli::DumpAction,
@@ -33,6 +37,7 @@ pub fn run(action: DumpAction) -> Result<()> {
     match action {
         DumpAction::Start { delay_secs } => start(delay_secs),
         DumpAction::Taskbar => taskbar(),
+        DumpAction::Explorer => explorer(),
         DumpAction::Collect => collect(),
         DumpAction::Stop => stop(),
     }
@@ -76,6 +81,28 @@ fn taskbar() -> Result<()> {
          taskbar's flyouts once (hidden icons, a thumbnail preview) so they are \
          logged too. When done, restart Explorer (Task Manager > Windows Explorer > \
          Restart) to remove the dumping copy, then start sepiida again.",
+        log.display()
+    );
+    Ok(())
+}
+
+fn explorer() -> Result<()> {
+    let dll = shell_hook::hook_dll_path()?;
+    let window = shell_hook::explorer_window()?;
+    let (_, outcome) = shell_hook::attach_winui(&window, &dll, AttachMode::Dump)?;
+    println!(
+        "explorer.exe (pid {}): WinUI 3 dump attach {outcome:?}",
+        window.pid
+    );
+    let log = Paths::locate()?.log_dir.join("hook.log");
+    println!(
+        "\nFile Explorer's elements are logged as `tree add` lines in {}. In that \
+         window, visit Home, Gallery and a folder, open the details pane \
+         (Alt+Shift+P), a second tab, a right-click menu, the command bar's \
+         \"See more\" menu and a tooltip, so they are logged too. Open a second \
+         window as well, to see whether it is covered. When done, restart \
+         Explorer (Task Manager > Windows Explorer > Restart) to remove the \
+         dumping copy.",
         log.display()
     );
     Ok(())

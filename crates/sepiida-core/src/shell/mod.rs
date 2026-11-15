@@ -3,9 +3,14 @@
 
 pub mod attach_gate;
 pub mod attach_request;
+pub mod backdrop;
+pub mod carried;
 pub mod colors;
 pub mod crash_guard;
 pub mod finder;
+pub mod folder_attach;
+pub mod framework;
+pub mod gdi_glass;
 pub mod hosts;
 pub mod layout;
 pub mod markup;

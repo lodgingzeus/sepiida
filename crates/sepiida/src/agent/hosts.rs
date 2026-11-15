@@ -38,6 +38,7 @@ use sepiida_core::{
     schedule::Event,
     shell::{
         crash_guard::{CrashGuard, Verdict, is_crash_exit},
+        framework::Framework,
         hosts::Host,
         protocol::Command,
         rules::Role,
@@ -113,7 +114,7 @@ impl HostStyling {
                 }
             };
             for process in found {
-                if shell_hook::is_attached(process.pid) {
+                if shell_hook::is_attached(process.pid, Framework::System) {
                     self.send_colors(host, process.pid);
                 } else if KEPT_ATTACHED.contains(&host) && !self.has_current_colors(process.pid) {
                     self.attach(host, process.pid, &dll);
@@ -128,7 +129,7 @@ impl HostStyling {
         if self.colors.is_empty() {
             return;
         }
-        if shell_hook::is_attached(pid) {
+        if shell_hook::is_attached(pid, Framework::System) {
             self.send_colors(host, pid);
         } else if self.attached.contains_key(&pid) {
             // Attached while hidden; its control window comes with the
@@ -169,7 +170,7 @@ impl HostStyling {
                     waited = at;
                     // No control window yet (still opening) or gone: skip
                     // this round, the next may find one.
-                    let _ = send_style(pid, &colors);
+                    let _ = send_style(pid, Framework::System, &colors);
                 }
             });
         if let Err(error) = spawned {
@@ -268,7 +269,7 @@ impl HostStyling {
     }
 
     fn send_colors(&self, host: Host, pid: u32) {
-        match send_style(pid, &self.colors) {
+        match send_style(pid, Framework::System, &self.colors) {
             Ok(()) => info!(?host, pid, "shell colours and look sent"),
             Err(error) => warn!(?host, pid, "could not send the shell colours: {error}"),
         }
@@ -322,15 +323,20 @@ impl HostStyling {
     }
 }
 
-/// Sends the colours, then turns the look on: a copy of the DLL that is
-/// styling shows the full look, without a `shell look on`. Sent with
-/// every colour update and re-send, so XAML threads and processes that
-/// came up since (a reopened flyout, a restarted host) get it too; the DLL
-/// ignores it while the look is already on.
-pub fn send_style(pid: u32, colors: &[(Role, Color)]) -> Result<(), ShellHookError> {
+/// Sends the colours to `framework`'s copy in `pid`, then turns the look
+/// on: a copy of the DLL that is styling shows the full look, without a
+/// `shell look on`. Sent with every colour update and re-send, so XAML
+/// threads and processes that came up since (a reopened flyout, a
+/// restarted host) get it too; the DLL ignores it while the look is
+/// already on.
+pub fn send_style(
+    pid: u32,
+    framework: Framework,
+    colors: &[(Role, Color)],
+) -> Result<(), ShellHookError> {
     for &(role, color) in colors {
-        shell_hook::send(pid, Command::SetColor(role, color))?;
+        shell_hook::send(pid, framework, Command::SetColor(role, color))?;
     }
-    shell_hook::send(pid, Command::SetLook(true))?;
+    shell_hook::send(pid, framework, Command::SetLook(true))?;
     Ok(())
 }

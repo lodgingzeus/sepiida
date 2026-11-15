@@ -5,6 +5,7 @@
 //! placeholder text (the author's own).
 
 use super::edge::{PANEL_EDGE, PANEL_EDGE_THICKNESS};
+use crate::shell::framework::Framework;
 use crate::shell::rules::{
     Role,
     windhawk::{Theme, Var},
@@ -48,6 +49,7 @@ const VARS: &[(&str, Var)] = &[
 ];
 
 pub const START: Theme = Theme {
+    framework: Framework::System,
     targets: &[
         (
             "StackPanel#TimeAndDatePanel",

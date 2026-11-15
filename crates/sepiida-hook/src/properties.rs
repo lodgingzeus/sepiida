@@ -2,7 +2,7 @@
 //! indices, values, new instances and the objects behind handles. Every
 //! failure is logged here, since each Windows round trip is expensive.
 
-use sepiida_core::shell::{layout::ValueSource, tree::Handle};
+use sepiida_core::shell::{framework::Framework, layout::ValueSource, tree::Handle};
 use windows::{
     Win32::System::Com::CoTaskMemFree,
     core::{BSTR, HRESULT, HSTRING, IUnknown, Interface, PCWSTR},
@@ -16,18 +16,31 @@ use crate::{
     },
 };
 
-/// The two diagnostics interfaces XAML hands us, used together.
+/// The two diagnostics interfaces XAML hands us, used together, and the
+/// framework they belong to.
 pub struct Xaml {
     pub diagnostics: IXamlDiagnostics,
     pub service: IVisualTreeService3,
+    pub framework: Framework,
 }
 
 impl Xaml {
-    pub fn new(diagnostics: IXamlDiagnostics, service: IVisualTreeService3) -> Self {
+    pub fn new(
+        diagnostics: IXamlDiagnostics,
+        service: IVisualTreeService3,
+        framework: Framework,
+    ) -> Self {
         Self {
             diagnostics,
             service,
+            framework,
         }
+    }
+
+    /// The full name of one of the framework's types, from its name below
+    /// the root namespace (`Media.SolidColorBrush`).
+    pub fn type_name(&self, below_root: &str) -> String {
+        format!("{}.{below_root}", self.framework.namespace())
     }
 
     /// The object behind `handle`, as an owned reference.

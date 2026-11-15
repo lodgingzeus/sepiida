@@ -36,6 +36,7 @@ use crate::{DllGetClassObject, tap::Factory, xamlom::*};
 
 mod fake;
 mod flyouts;
+mod frameworks;
 mod layout;
 mod tint;
 

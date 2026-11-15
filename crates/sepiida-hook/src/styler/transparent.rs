@@ -11,7 +11,8 @@ use crate::{
     xamlom::{ISolidColorBrush, InstanceHandle},
 };
 
-const BRUSH_TYPE: &str = "Windows.UI.Xaml.Media.SolidColorBrush";
+/// Below the framework's root namespace.
+const BRUSH_TYPE: &str = "Media.SolidColorBrush";
 const COLOR_TYPE: &str = "Windows.UI.Color";
 /// Fully transparent black, as XAML writes `Transparent`.
 const TRANSPARENT: &str = "#00000000";
@@ -33,7 +34,7 @@ impl TransparentBrush {
 }
 
 fn make(xaml: &Xaml) -> Option<IUnknown> {
-    let handle = xaml.create(BRUSH_TYPE, None)?;
+    let handle = xaml.create(&xaml.type_name(BRUSH_TYPE), None)?;
     let object = xaml.object(handle)?;
     let ok = by_diagnostics(xaml, handle) || by_interface(&object);
     log!("transparent brush {handle:#x}: {ok}");

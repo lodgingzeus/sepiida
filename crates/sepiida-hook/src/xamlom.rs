@@ -333,6 +333,23 @@ pub unsafe trait IXamlReaderStatics: IUnknown {
     ) -> HRESULT;
 }
 
+/// `Microsoft.UI.Xaml.Markup.IXamlReaderStatics` (WinUI 3): the IID from
+/// the Windows App SDK's `Microsoft.UI.Xaml.winmd` (WinUI package 2.6.5,
+/// read with windows-bindgen 0.66), the same slots as the system XAML one
+/// above.
+#[interface("82a4cd9e-435e-5aeb-8c4f-300cece45cae")]
+pub unsafe trait IWinUiXamlReaderStatics: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn Load(&self, xaml: *mut c_void, result: *mut *mut c_void) -> HRESULT;
+    pub fn LoadWithInitialTemplateValidation(
+        &self,
+        xaml: *mut c_void,
+        result: *mut *mut c_void,
+    ) -> HRESULT;
+}
+
 /// `Windows.UI.Xaml.Media.IXamlCompositionBrushBaseFactory`, from the SDK's
 /// `winrt/windows.ui.xaml.media.h`. `CreateInstance` composes a new brush
 /// with `outer` as its controlling object and returns the inner

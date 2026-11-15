@@ -129,6 +129,7 @@ fn shell(command: ShellCommand) -> Result<()> {
         ShellCommand::AttachSurface { host, delay_secs } => {
             shell::surfaces::attach(host, delay_secs)
         }
+        ShellCommand::AttachExplorer => shell::explorer::attach(),
         ShellCommand::Color(color) => {
             shell::surfaces::broadcast(Command::SetColor(Role::Surface, color))
         }
@@ -136,6 +137,7 @@ fn shell(command: ShellCommand) -> Result<()> {
             shell::surfaces::broadcast(Command::SetTintOpacity(Role::Surface, opacity))
         }
         ShellCommand::Look(on) => shell::surfaces::broadcast(Command::SetLook(on)),
+        ShellCommand::Gdi(on) => shell::surfaces::broadcast(Command::SetGdiAlpha(on)),
         ShellCommand::Restore => shell::surfaces::broadcast(Command::Restore),
         ShellCommand::Detach => shell::surfaces::broadcast(Command::Detach),
         ShellCommand::Dump(action) => shell::dump::run(action),

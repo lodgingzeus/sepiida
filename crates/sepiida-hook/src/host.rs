@@ -1,10 +1,12 @@
-//! Which shell process the DLL is loaded in, and so which rules apply.
-//! Decided from our own executable's file name; a process that is not a
-//! known shell host gets no rules and is never styled.
+//! Which shell process the DLL is loaded in, and so which rules apply to
+//! each XAML framework there. Decided from our own executable's file name;
+//! a process that is not a known shell host gets no rules and is never
+//! styled.
 
 use std::sync::OnceLock;
 
 use sepiida_core::shell::{
+    framework::Framework,
     hosts::Host,
     rules::{Rule, rules_for, skipped_for},
 };
@@ -32,8 +34,9 @@ pub fn current() -> Option<Host> {
     })
 }
 
-/// The rules for this process; none outside the known hosts.
-pub fn rules() -> &'static [Rule] {
+/// The rules for `framework`'s elements in this process; none outside the
+/// known hosts.
+pub fn rules(framework: Framework) -> &'static [Rule] {
     #[cfg(all(test, windows))]
     if let Some(rules) = *tests::RULES.lock().unwrap_or_else(|e| e.into_inner()) {
         return rules;
@@ -41,9 +44,14 @@ pub fn rules() -> &'static [Rule] {
     let Some(host) = current() else {
         return &[];
     };
-    static LOGGED: OnceLock<()> = OnceLock::new();
-    LOGGED.get_or_init(|| {
-        for skipped in skipped_for(host) {
+    static LOGGED_SYSTEM: OnceLock<()> = OnceLock::new();
+    static LOGGED_WINUI: OnceLock<()> = OnceLock::new();
+    let logged = match framework {
+        Framework::System => &LOGGED_SYSTEM,
+        Framework::WinUi => &LOGGED_WINUI,
+    };
+    logged.get_or_init(|| {
+        for skipped in skipped_for(host, framework) {
             log!(
                 "theme entry left out: {}: {}",
                 skipped.target,
@@ -51,7 +59,7 @@ pub fn rules() -> &'static [Rule] {
             );
         }
     });
-    rules_for(host)
+    rules_for(host, framework)
 }
 
 #[cfg(all(test, windows))]

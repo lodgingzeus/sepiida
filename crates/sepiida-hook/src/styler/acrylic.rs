@@ -18,7 +18,8 @@ use super::tint::{Brush, log_details, read_tint, write_tint};
 use crate::{log::log, properties::Xaml, xamlom::InstanceHandle};
 
 /// The type `CreateInstance` makes.
-const ACRYLIC_TYPE: &str = "Windows.UI.Xaml.Media.AcrylicBrush";
+/// Below the framework's root namespace.
+const ACRYLIC_TYPE: &str = "Media.AcrylicBrush";
 
 struct Own {
     object: IUnknown,
@@ -57,7 +58,7 @@ impl OwnAcrylic {
 }
 
 fn make(xaml: &Xaml) -> Option<Own> {
-    let handle = xaml.create(ACRYLIC_TYPE, None)?;
+    let handle = xaml.create(&xaml.type_name(ACRYLIC_TYPE), None)?;
     let object = xaml.object(handle)?;
     let brush = Brush::from_object(&object, handle)?;
     // What a new brush holds before we tint it, and its background source.

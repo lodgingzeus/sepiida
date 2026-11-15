@@ -1,9 +1,11 @@
 //! Windhawk target selectors: `Type#Name > Type > * > Type#Name`, several
 //! separated by commas. The last part is the element; the others are its
 //! ancestors, ` > ` meaning "direct parent of" and `*` any number of
-//! ancestors in between. A type without a namespace is a
-//! `Windows.UI.Xaml.Controls` type, `Rectangle` a shape, and `muxc:` stands
-//! for `Microsoft.UI.Xaml.Controls.`, as in the Windhawk stylers.
+//! ancestors in between. A type without a namespace is a `Controls` type
+//! of the theme's framework (`Windows.UI.Xaml.Controls` for the shell,
+//! `Microsoft.UI.Xaml.Controls` for File Explorer), `Rectangle` a shape,
+//! and `muxc:` stands for `Microsoft.UI.Xaml.Controls.`, as in the
+//! Windhawk stylers.
 //!
 //! Not supported yet, and reported as such: `[n]` (child index),
 //! `[Prop=Value]` (property condition), `@Group` (visual state) and
@@ -12,7 +14,10 @@
 use std::fmt;
 
 use super::leak;
-use crate::shell::rules::{Name, Step};
+use crate::shell::{
+    framework::Framework,
+    rules::{Name, Step},
+};
 
 /// One parsed selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,9 +57,16 @@ enum Part {
     Wildcard,
 }
 
-/// Every selector in `text`, split on the commas outside `[…]`.
-pub fn parse_targets(text: &'static str) -> Result<Vec<Target>, SelectorError> {
-    split_targets(text).into_iter().map(parse_target).collect()
+/// Every selector in `text`, split on the commas outside `[…]`; types
+/// without a namespace belong to `framework`.
+pub fn parse_targets(
+    text: &'static str,
+    framework: Framework,
+) -> Result<Vec<Target>, SelectorError> {
+    split_targets(text)
+        .into_iter()
+        .map(|target| parse_target(target, framework))
+        .collect()
 }
 
 fn split_targets(text: &'static str) -> Vec<&'static str> {
@@ -75,13 +87,13 @@ fn split_targets(text: &'static str) -> Vec<&'static str> {
     parts
 }
 
-fn parse_target(text: &'static str) -> Result<Target, SelectorError> {
+fn parse_target(text: &'static str, framework: Framework) -> Result<Target, SelectorError> {
     if text.trim().is_empty() {
         return Err(SelectorError::Empty);
     }
     let parts: Vec<Part> = text
         .split(" > ")
-        .map(parse_part)
+        .map(|part| parse_part(part, framework))
         .collect::<Result<_, _>>()?;
     let Some((Part::Element { type_name, name }, ancestors)) = parts.split_last() else {
         return Err(SelectorError::MisplacedWildcard);
@@ -104,7 +116,7 @@ fn parse_target(text: &'static str) -> Result<Target, SelectorError> {
     })
 }
 
-fn parse_part(part: &'static str) -> Result<Part, SelectorError> {
+fn parse_part(part: &'static str, framework: Framework) -> Result<Part, SelectorError> {
     let part = part.trim();
     match part {
         "*" => return Ok(Part::Wildcard),
@@ -136,21 +148,22 @@ fn parse_part(part: &'static str) -> Result<Part, SelectorError> {
         rest = &after[next..];
     }
     Ok(Part::Element {
-        type_name: full_type_name(type_name),
+        type_name: full_type_name(type_name, framework),
         name,
     })
 }
 
 /// The type name XAML Diagnostics reports for a selector's type.
-fn full_type_name(type_name: &'static str) -> &'static str {
+fn full_type_name(type_name: &'static str, framework: Framework) -> &'static str {
     if let Some(short) = type_name.strip_prefix("muxc:") {
         return leak(format!("Microsoft.UI.Xaml.Controls.{short}"));
     }
     if type_name.contains(['.', ':']) {
         return type_name;
     }
+    let namespace = framework.namespace();
     if type_name == "Rectangle" {
-        return "Windows.UI.Xaml.Shapes.Rectangle";
+        return leak(format!("{namespace}.Shapes.Rectangle"));
     }
-    leak(format!("Windows.UI.Xaml.Controls.{type_name}"))
+    leak(format!("{namespace}.Controls.{type_name}"))
 }

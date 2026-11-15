@@ -8,18 +8,23 @@
 //! reads back with `GetInitializationData`, and the DLL applies them as
 //! soon as targets appear.
 //!
-//! The string is `<tag>(;<role id>=<rrggbb>)*`, e.g.
-//! `sepiida:style;1=336699`. sepiida.exe hands the DLL's attach export
+//! The string is `<tag>[@winui](;<role id>=<rrggbb>)*`, e.g.
+//! `sepiida:style;1=336699` or `sepiida:dump@winui`. `@winui` marks an
+//! attach to File Explorer's WinUI 3 XAML, so the DLL picks that
+//! framework's rules and value types and keeps the attachment apart from
+//! the taskbar's in the same process. sepiida.exe hands the DLL's attach export
 //! one fixed-size number per role (a pointer and a count it checks),
 //! never a string, and the export writes the string itself; the DLL parses it strictly and takes no colour from anything
 //! malformed.
 
-use super::{hosts::AttachMode, rules::Role};
+use super::{framework::Framework, hosts::AttachMode, rules::Role};
 use crate::Color;
 
 /// The tag of style mode with colours. Style mode without colours passes
 /// no string, as before colours could travel.
 const STYLE_TAG: &str = "sepiida:style";
+/// Appended to the tag for WinUI 3 (`Framework::WinUi`).
+const WINUI_SUFFIX: &str = "@winui";
 /// Longest initialisation string accepted; the longest valid one is well
 /// under it.
 pub const MAX_INIT_DATA: usize = 96;
@@ -34,6 +39,7 @@ pub type ExportColors = [u32; Role::ALL.len()];
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AttachRequest {
     pub mode: AttachMode,
+    pub framework: Framework,
     /// At most one per role, in role order.
     colors: Vec<(Role, Color)>,
 }
@@ -52,7 +58,17 @@ impl AttachRequest {
             }
             kept.sort_by_key(|(role, _)| *role);
         }
-        Self { mode, colors: kept }
+        Self {
+            mode,
+            framework: Framework::System,
+            colors: kept,
+        }
+    }
+
+    /// The same request for `framework`'s XAML.
+    pub fn for_framework(mut self, framework: Framework) -> Self {
+        self.framework = framework;
+        self
     }
 
     pub fn colors(&self) -> &[(Role, Color)] {
@@ -62,12 +78,16 @@ impl AttachRequest {
     /// The initialisation string for this request; `None` passes no data
     /// (plain style mode).
     pub fn init_data(&self) -> Option<String> {
+        let winui = self.framework == Framework::WinUi;
         let tag = match self.mode {
-            AttachMode::Style if self.colors.is_empty() => return None,
+            AttachMode::Style if self.colors.is_empty() && !winui => return None,
             AttachMode::Style => STYLE_TAG,
             other => other.init_data()?,
         };
         let mut data = tag.to_owned();
+        if winui {
+            data.push_str(WINUI_SUFFIX);
+        }
         for (role, c) in &self.colors {
             data.push_str(&format!(";{}={:02x}{:02x}{:02x}", role.id(), c.r, c.g, c.b));
         }
@@ -81,23 +101,30 @@ impl AttachRequest {
             return Self::default();
         }
         let mut parts = data.split(';');
-        let tag = parts.next().unwrap_or_default();
+        let full_tag = parts.next().unwrap_or_default();
+        let (tag, framework) = match full_tag.strip_suffix(WINUI_SUFFIX) {
+            Some(tag) => (tag, Framework::WinUi),
+            None => (full_tag, Framework::System),
+        };
         let mode = AttachMode::from_init_data(tag);
         let known_tag = tag == STYLE_TAG || mode != AttachMode::Style;
-        if !known_tag || mode == AttachMode::Dump {
-            return Self::new(mode, &[]);
+        if !known_tag {
+            return Self::default();
+        }
+        if mode == AttachMode::Dump {
+            return Self::new(mode, &[]).for_framework(framework);
         }
         let mut colors = Vec::new();
         for part in parts {
             match parse_color(part) {
                 Some((role, _)) if colors.iter().any(|(r, _)| *r == role) => {
-                    return Self::new(mode, &[]);
+                    return Self::new(mode, &[]).for_framework(framework);
                 }
                 Some(entry) => colors.push(entry),
-                None => return Self::new(mode, &[]),
+                None => return Self::new(mode, &[]).for_framework(framework),
             }
         }
-        Self::new(mode, &colors)
+        Self::new(mode, &colors).for_framework(framework)
     }
 
     /// The colour arguments of the DLL's attach export.
@@ -141,132 +168,4 @@ fn parse_color(part: &str) -> Option<(Role, Color)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const BLUE: Color = Color::new(0x33, 0x66, 0x99);
-    const BLACK: Color = Color::new(0, 0, 0);
-
-    #[test]
-    fn requests_round_trip_through_init_data_and_the_export() {
-        for request in [
-            AttachRequest::new(AttachMode::Style, &[]),
-            AttachRequest::new(AttachMode::Style, &[(Role::Surface, BLUE)]),
-            AttachRequest::new(
-                AttachMode::StyleAlongside,
-                &[(Role::Accent, BLACK), (Role::Surface, BLUE)],
-            ),
-            AttachRequest::new(AttachMode::StyleAlongside, &[]),
-            AttachRequest::new(AttachMode::Dump, &[]),
-            AttachRequest::new(
-                AttachMode::Style,
-                &[
-                    (Role::SurfaceRaised, BLUE),
-                    (Role::Accent, BLACK),
-                    (Role::Surface, BLUE),
-                ],
-            ),
-        ] {
-            let data = request.init_data().unwrap_or_default();
-            assert_eq!(AttachRequest::from_init_data(&data), request, "{data}");
-            assert_eq!(
-                AttachRequest::from_export(request.mode, request.export_colors()),
-                Some(request.clone())
-            );
-        }
-    }
-
-    #[test]
-    fn the_string_is_tag_then_role_colours() {
-        let request = AttachRequest::new(
-            AttachMode::Style,
-            &[(Role::Accent, BLACK), (Role::Surface, BLUE)],
-        );
-        assert_eq!(
-            request.init_data().as_deref(),
-            Some("sepiida:style;1=336699;2=000000")
-        );
-        assert_eq!(AttachRequest::new(AttachMode::Style, &[]).init_data(), None);
-        let every_role: Vec<(Role, Color)> = Role::ALL.iter().map(|&r| (r, BLUE)).collect();
-        assert!(
-            AttachRequest::new(AttachMode::StyleAlongside, &every_role)
-                .init_data()
-                .is_some_and(|d| d.len() <= MAX_INIT_DATA)
-        );
-    }
-
-    #[test]
-    fn dump_mode_carries_no_colours_and_the_last_colour_wins() {
-        let dump = AttachRequest::new(AttachMode::Dump, &[(Role::Surface, BLUE)]);
-        assert!(dump.colors().is_empty());
-        assert_eq!(dump.init_data().as_deref(), Some("sepiida:dump"));
-        let twice = AttachRequest::new(
-            AttachMode::Style,
-            &[(Role::Surface, BLACK), (Role::Surface, BLUE)],
-        );
-        assert_eq!(twice.colors(), &[(Role::Surface, BLUE)]);
-    }
-
-    #[test]
-    fn malformed_colours_are_all_dropped() {
-        for data in [
-            "sepiida:style;1=33669",
-            "sepiida:style;1=3366999",
-            "sepiida:style;1=33669g",
-            "sepiida:style;4=336699",
-            "sepiida:style;0=336699",
-            "sepiida:style;1=336699;1=000000",
-            "sepiida:style;1=336699;",
-            "sepiida:style;11=336699",
-            "sepiida:style;1=+36699",
-            "sepiida:style;1=336699;2",
-        ] {
-            let request = AttachRequest::from_init_data(data);
-            assert_eq!(request.mode, AttachMode::Style, "{data}");
-            assert!(request.colors().is_empty(), "{data}");
-        }
-        let alongside = AttachRequest::from_init_data("sepiida:style-alongside;x");
-        assert_eq!(alongside.mode, AttachMode::StyleAlongside);
-        assert!(alongside.colors().is_empty());
-    }
-
-    #[test]
-    fn unknown_tags_and_long_strings_mean_plain_style() {
-        for data in [
-            "other;1=336699",
-            "SEPIIDA:STYLE;1=336699",
-            "sepiida:dump;1=336699",
-            &format!("sepiida:style;1=336699{}", " ".repeat(MAX_INIT_DATA)),
-        ] {
-            let request = AttachRequest::from_init_data(data);
-            assert!(request.colors().is_empty(), "{data}");
-        }
-        assert_eq!(
-            AttachRequest::from_init_data("sepiida:dump;1=336699").mode,
-            AttachMode::Dump
-        );
-    }
-
-    #[test]
-    fn export_values_need_the_colour_marker() {
-        assert_eq!(
-            AttachRequest::from_export(AttachMode::Style, [0x0133_6699, 0, 0])
-                .map(|r| r.colors().to_vec()),
-            Some(vec![(Role::Surface, BLUE)])
-        );
-        // Black is a colour, not "none".
-        assert_eq!(
-            AttachRequest::from_export(AttachMode::Style, [0x0100_0000, 0, 0])
-                .map(|r| r.colors().to_vec()),
-            Some(vec![(Role::Surface, BLACK)])
-        );
-        assert_eq!(
-            AttachRequest::from_export(AttachMode::Style, [0x0233_6699, 0, 0]),
-            None
-        );
-        assert_eq!(
-            AttachRequest::from_export(AttachMode::Style, [0x0033_6699, 0, 0]),
-            None
-        );
-    }
-}
+mod tests;

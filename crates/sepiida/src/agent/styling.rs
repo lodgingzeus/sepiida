@@ -1,5 +1,6 @@
 //! Shell styling driven by the agent: attaches the hook DLL to Explorer
-//! and the sandboxed hosts (`hosts`) while the setting is on, sends them
+//! (the taskbar, and File Explorer's folder windows: `folders`) and the
+//! sandboxed hosts (`hosts`) while the setting is on, sends them
 //! the palette's colours and turns the look on after every apply, and takes the styling down
 //! when the setting goes off or the agent quits. Crash guards turn the
 //! setting off if Explorer or a host keeps dying soon after an attach.
@@ -20,6 +21,7 @@ use sepiida_core::{
         attach_gate::{AttachGate, Decision},
         colors::role_colors,
         crash_guard::Verdict,
+        framework::Framework,
         hosts::Host,
         protocol::Command,
         rules::Role,
@@ -27,7 +29,7 @@ use sepiida_core::{
 };
 use tracing::{error, info, warn};
 
-use super::hosts::HostStyling;
+use super::{folders::FolderStyling, hosts::HostStyling};
 use crate::win::{
     message_box,
     shell_hook::{self, Method, Outcome, Taskbar},
@@ -52,6 +54,7 @@ pub struct ShellStyling {
     config_path: PathBuf,
     gate: AttachGate,
     hosts: HostStyling,
+    folders: FolderStyling,
 }
 
 impl ShellStyling {
@@ -59,7 +62,8 @@ impl ShellStyling {
         Self {
             config_path,
             gate: AttachGate::default(),
-            hosts: HostStyling::new(events),
+            hosts: HostStyling::new(events.clone()),
+            folders: FolderStyling::new(events),
         }
     }
 
@@ -81,15 +85,27 @@ impl ShellStyling {
             info!("Explorer restarted moments ago; attaching to it on the next look");
         } else {
             self.sync_taskbar(&colors, system_dark);
+            self.folders.sync(&colors, &mut self.gate);
         }
         self.hosts.sync(&colors);
     }
 
-    /// A window of a sandboxed host appeared (process `pid`).
+    /// A window of a sandboxed host, or a folder window of explorer.exe,
+    /// appeared (process `pid`).
     pub fn window_shown(&mut self, host: Host, pid: u32) {
-        if self.gate.enabled() {
+        if !self.gate.enabled() {
+            return;
+        }
+        if host == Host::Explorer {
+            self.folders.window_shown(pid, &mut self.gate);
+        } else {
             self.hosts.window_shown(host, pid);
         }
+    }
+
+    /// An attach to File Explorer's XAML in `pid` ended.
+    pub fn explorer_attach_done(&mut self, pid: u32, attached: bool) {
+        self.folders.attach_done(pid, attached);
     }
 
     /// A sandboxed host exited with `exit_code` at `at`. Turns styling off
@@ -108,18 +124,23 @@ impl ShellStyling {
                 return;
             }
         };
-        if !shell_hook::is_attached(taskbar.pid) && !self.attach(&taskbar) {
+        if !shell_hook::is_attached(taskbar.pid, Framework::System) && !self.attach(&taskbar) {
             return;
         }
         for &(role, color) in colors {
-            if let Err(error) = shell_hook::send(taskbar.pid, Command::SetColor(role, color)) {
+            if let Err(error) = shell_hook::send(
+                taskbar.pid,
+                Framework::System,
+                Command::SetColor(role, color),
+            ) {
                 warn!("could not send the shell colours: {error}");
                 return;
             }
             info!(?role, %color, system_dark, "shell colour sent");
         }
         // After the colours: the look's glass is made in their colour.
-        if let Err(error) = shell_hook::send(taskbar.pid, Command::SetLook(true)) {
+        if let Err(error) = shell_hook::send(taskbar.pid, Framework::System, Command::SetLook(true))
+        {
             warn!("could not turn the shell look on: {error}");
         }
     }
@@ -162,7 +183,11 @@ impl ShellStyling {
                         return false;
                     }
                 }
-                if !shell_hook::wait_until_attached(taskbar.pid, CONTROL_WINDOW_TIMEOUT) {
+                if !shell_hook::wait_until_attached(
+                    taskbar.pid,
+                    Framework::System,
+                    CONTROL_WINDOW_TIMEOUT,
+                ) {
                     warn!(
                         "the styling DLL attached but created no control window; see logs\\hook.log"
                     );
@@ -186,14 +211,16 @@ impl ShellStyling {
         }
     }
 
-    /// Restores and detaches every copy of the DLL in Explorer and the
-    /// sandboxed hosts, if any.
+    /// Restores and detaches every copy of the DLL in the taskbar and the
+    /// sandboxed hosts, and restores File Explorer's folder windows (whose
+    /// copies stay attached), if any.
     pub fn stop(&mut self) {
         self.hosts.stop();
+        self.folders.stop();
         let Ok(taskbar) = shell_hook::taskbar() else {
             return;
         };
-        match shell_hook::detach_all(taskbar.pid) {
+        match shell_hook::detach_framework(taskbar.pid, Framework::System) {
             Ok(0) => {}
             Ok(windows) => info!(windows, "taskbar styling removed"),
             Err(error) => warn!("could not remove the taskbar styling: {error}"),
