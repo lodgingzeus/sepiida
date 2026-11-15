@@ -25,6 +25,9 @@ pub struct Element {
     pub parent: Option<Handle>,
     pub type_name: Box<str>,
     pub name: Box<str>,
+    /// Its place among its parent's children (0-based) as XAML reported
+    /// it when the element was added; `None` if not reported.
+    pub index: Option<u32>,
 }
 
 /// Whether an element is a rule's target.
@@ -79,6 +82,18 @@ impl ElementTree {
     /// that is already known replaces it (the element moved). Returns false,
     /// and records nothing, for handle 0 or when the tree is full.
     pub fn add(&mut self, handle: Handle, parent: Handle, type_name: &str, name: &str) -> bool {
+        self.add_at(handle, parent, None, type_name, name)
+    }
+
+    /// `add`, with the element's place among its parent's children.
+    pub fn add_at(
+        &mut self,
+        handle: Handle,
+        parent: Handle,
+        index: Option<u32>,
+        type_name: &str,
+        name: &str,
+    ) -> bool {
         if handle == 0 {
             return false;
         }
@@ -89,6 +104,7 @@ impl ElementTree {
             parent: (parent != 0 && parent != handle).then_some(parent),
             type_name: type_name.into(),
             name: name.into(),
+            index,
         };
         self.elements.insert(handle, element);
         true
@@ -189,7 +205,7 @@ impl ElementTree {
         let Some(element) = self.elements.get(&handle) else {
             return Verdict::No;
         };
-        if !rule.selects(&element.type_name, &element.name) {
+        if !rule.selects(&element.type_name, &element.name) || !at(element, rule.position) {
             return Verdict::No;
         }
         let parent = match rule.parent {
@@ -224,14 +240,21 @@ impl ElementTree {
             return Verdict::No;
         }
         match *step {
-            Step::Element { type_name, name } => {
+            Step::Element {
+                type_name,
+                name,
+                position,
+            } => {
                 let Some(handle) = start else {
                     return Verdict::No;
                 };
                 let Some(element) = self.elements.get(&handle) else {
                     return Verdict::NotYet;
                 };
-                if &*element.type_name == type_name && name.accepts(&element.name) {
+                if &*element.type_name == type_name
+                    && name.accepts(&element.name)
+                    && at(element, position)
+                {
                     self.chain_verdict(element.parent, rest, budget - 1)
                 } else {
                     Verdict::No
@@ -273,6 +296,12 @@ impl ElementTree {
             .filter(|&h| self.matches(h, rule))
             .collect()
     }
+}
+
+/// Whether `element` is at `position` among its parent's children, if a
+/// position is asked for.
+fn at(element: &Element, position: Option<u32>) -> bool {
+    position.is_none_or(|p| element.index == Some(p))
 }
 
 #[cfg(test)]

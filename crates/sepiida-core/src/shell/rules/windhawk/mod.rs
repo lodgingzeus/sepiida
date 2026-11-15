@@ -16,4 +16,4 @@ mod tests;
 use leak::leak;
 pub use selector::{SelectorError, Target, parse_targets};
 pub use style::{Style, StyleError, StyleValue, parse_style};
-pub use theme::{Built, Skipped, Theme, Var, build, build_all};
+pub use theme::{Built, Skipped, Theme, Var, build, build_all, build_on};

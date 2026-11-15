@@ -7,7 +7,11 @@
 //! parses a buffer from another process; every `(message, wParam)` pair
 //! either decodes to a command or is ignored.
 
-use super::{framework::Framework, rules::Role, tint::Opacity};
+use super::{
+    framework::Framework,
+    rules::{Material, Role},
+    tint::Opacity,
+};
 use crate::Color;
 
 /// Class ID of the DLL's `IObjectWithSite` object, passed to
@@ -107,6 +111,7 @@ const MSG_SET_COLOR: u32 = WM_APP + 0x5e4;
 const MSG_SET_TINT_OPACITY: u32 = WM_APP + 0x5e5;
 const MSG_SET_LOOK: u32 = WM_APP + 0x5e6;
 const MSG_SET_GDI_ALPHA: u32 = WM_APP + 0x5e7;
+const MSG_SET_MATERIAL: u32 = WM_APP + 0x5e8;
 /// `SetTintOpacity`'s value byte for "Windows' own opacity".
 const OPACITY_ORIGINAL: usize = 0xff;
 
@@ -124,6 +129,10 @@ pub enum Command {
     /// readable over its glass (on by default while the glass is on). For
     /// the whole process, not one thread.
     SetGdiAlpha(bool),
+    /// The look's material (a setting): look rules for the other one are
+    /// put back and this one's written, if the look is on. Glass until
+    /// told.
+    SetMaterial(Material),
     /// Put back the original brushes and layout and keep watching.
     Restore,
     /// Put back the original brushes and stop watching. The DLL stays
@@ -149,6 +158,7 @@ impl Command {
             ),
             Self::SetLook(on) => (MSG_SET_LOOK, usize::from(on)),
             Self::SetGdiAlpha(on) => (MSG_SET_GDI_ALPHA, usize::from(on)),
+            Self::SetMaterial(material) => (MSG_SET_MATERIAL, usize::from(material.id())),
             Self::Restore => (MSG_RESTORE, 0),
             Self::Detach => (MSG_DETACH, 0),
         }
@@ -174,6 +184,7 @@ impl Command {
             }
             (MSG_SET_LOOK, w) if w <= 1 => Some(Self::SetLook(w == 1)),
             (MSG_SET_GDI_ALPHA, w) if w <= 1 => Some(Self::SetGdiAlpha(w == 1)),
+            (MSG_SET_MATERIAL, w) if w <= 0xff => Material::from_id(w as u8).map(Self::SetMaterial),
             (MSG_RESTORE, 0) => Some(Self::Restore),
             (MSG_DETACH, 0) => Some(Self::Detach),
             _ => None,
@@ -203,6 +214,8 @@ mod tests {
             Command::SetLook(false),
             Command::SetGdiAlpha(true),
             Command::SetGdiAlpha(false),
+            Command::SetMaterial(Material::Glass),
+            Command::SetMaterial(Material::Solid),
             Command::Restore,
             Command::Detach,
         ] {
@@ -233,6 +246,8 @@ mod tests {
         assert_ne!(gdi, look);
         assert_eq!(Command::decode(gdi, 2), None);
         assert_eq!(Command::decode(detach, 1), None);
+        let (material, _) = Command::SetMaterial(Material::Solid).encode();
+        assert_eq!(Command::decode(material, 2), None);
         assert_eq!(Command::decode(WM_APP, 0), None);
         assert_eq!(Command::decode(0x0010, 0), None); // WM_CLOSE
         // Version 1's single-colour message.

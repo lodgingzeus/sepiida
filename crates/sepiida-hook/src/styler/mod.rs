@@ -3,10 +3,14 @@
 //! brushes of solid paint (`solid`), the tinted acrylic brushes (`tint`),
 //! the look's layout values (`layout`, measured ones in `measured`) and
 //! its own acrylic and transparent brushes (`acrylic`, `transparent`) and
-//! XAML objects from theme lines (`markup`), and blur brushes (`blur`).
+//! XAML objects from theme lines (`markup`), blur brushes (`blur`) and
+//! attached properties (`attached`); selectors' property conditions
+//! (`condition`).
 
 mod acrylic;
+mod attached;
 mod blur;
+mod condition;
 mod layout;
 mod markup;
 mod measured;

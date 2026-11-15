@@ -23,6 +23,7 @@ component Swatch inherits Rectangle {
 // match `settings_model.rs`.
 export component SettingsWindow inherits Window {
     title: "sepiida settings";
+    icon: @image-url("../assets/sepiida-256.png");
     preferred-width: 460px;
     min-width: 360px;
 
@@ -42,6 +43,7 @@ export component SettingsWindow inherits Window {
     in-out property <int> mode-index;
     in-out property <bool> accent-enabled: true;
     in-out property <bool> shell-styling: false;
+    in-out property <bool> glass: true;
     in-out property <bool> locked;
     in property <string> locked-text;
     in-out property <bool> start-with-windows;
@@ -51,6 +53,7 @@ export component SettingsWindow inherits Window {
     callback mode-changed(int);
     callback accent-toggled(bool);
     callback shell-styling-toggled(bool);
+    callback glass-toggled(bool);
     callback lock-toggled(bool);
     callback start-with-windows-toggled(bool);
 
@@ -126,8 +129,10 @@ export component SettingsWindow inherits Window {
                     toggled => { root.shell-styling-toggled(self.checked); }
                 }
                 Switch {
-                    text: "Glass effect, experimental (coming later)";
-                    enabled: false;
+                    text: root.glass ? "Glass: translucent surfaces" : "Glass off: solid surfaces";
+                    checked <=> root.glass;
+                    enabled: root.shell-styling;
+                    toggled => { root.glass-toggled(self.checked); }
                 }
             }
         }

@@ -396,3 +396,65 @@ pub unsafe trait IElementCompositionPreviewStatics: IUnknown {
     pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
     pub fn GetElementVisual(&self, element: *mut c_void, visual: *mut *mut c_void) -> HRESULT;
 }
+
+/// `Windows.UI.Xaml.IDependencyObject`, from the SDK's
+/// `winrt/windows.ui.xaml.h` (members in its order), for attached
+/// properties, which have no place in our property chain lookups.
+#[interface("5c526665-f60e-4912-af59-5fe0680f089d")]
+pub unsafe trait IDependencyObject: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn GetValue(&self, property: *mut c_void, result: *mut *mut c_void) -> HRESULT;
+    pub fn SetValue(&self, property: *mut c_void, value: *mut c_void) -> HRESULT;
+    pub fn ClearValue(&self, property: *mut c_void) -> HRESULT;
+    pub fn ReadLocalValue(&self, property: *mut c_void, result: *mut *mut c_void) -> HRESULT;
+    pub fn GetAnimationBaseValue(&self, property: *mut c_void, result: *mut *mut c_void)
+    -> HRESULT;
+}
+
+/// `Windows.UI.Xaml.IDependencyPropertyStatics`, same header: only
+/// `UnsetValue`, what `ReadLocalValue` answers when there is no local
+/// value.
+#[interface("49e5f28f-8259-4d5c-aae0-83d56dbb68d9")]
+pub unsafe trait IDependencyPropertyStatics: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn get_UnsetValue(&self, value: *mut *mut c_void) -> HRESULT;
+}
+
+/// `Windows.UI.Xaml.IStyle`, same header: only up to `Setters`.
+#[interface("c4a9f225-9db7-4a7d-b6d1-f74edb9293c2")]
+pub unsafe trait IStyle: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn get_IsSealed(&self, value: *mut u8) -> HRESULT;
+    pub fn get_Setters(&self, value: *mut *mut c_void) -> HRESULT;
+}
+
+/// `IVector<Windows.UI.Xaml.SetterBase>` (`SetterBaseCollection`): only
+/// `GetAt` and `Size`. A parameterised IID, worked out the WinRT way
+/// (UUIDv5 over `pinterface({913337e9-…};rc(Windows.UI.Xaml.SetterBase;
+/// {418be27c-…}))`; the same method gives `IVector<String>`'s known IID).
+#[interface("bd55a7fd-7501-5519-9ffb-d0074240db61")]
+pub unsafe trait ISetterBaseVector: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn GetAt(&self, index: u32, result: *mut *mut c_void) -> HRESULT;
+    pub fn get_Size(&self, result: *mut u32) -> HRESULT;
+}
+
+/// `Windows.UI.Xaml.ISetter`, same header: the resolved property and the
+/// parsed value.
+#[interface("a73ded29-b4ae-4a81-be85-e690ba0d3b6e")]
+pub unsafe trait ISetter: IUnknown {
+    pub fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+    pub fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+    pub fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+    pub fn get_Property(&self, value: *mut *mut c_void) -> HRESULT;
+    pub fn put_Property(&self, value: *mut c_void) -> HRESULT;
+    pub fn get_Value(&self, value: *mut *mut c_void) -> HRESULT;
+}

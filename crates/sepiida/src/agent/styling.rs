@@ -24,7 +24,7 @@ use sepiida_core::{
         framework::Framework,
         hosts::Host,
         protocol::Command,
-        rules::Role,
+        rules::{Material, Role},
     },
 };
 use tracing::{error, info, warn};
@@ -73,7 +73,7 @@ impl ShellStyling {
 
     /// Called after every apply with the setting and the palette in effect.
     /// Never fails: problems are logged and the next apply tries again.
-    pub fn sync(&mut self, enabled: bool, palette: &Palette) {
+    pub fn sync(&mut self, enabled: bool, palette: &Palette, material: Material) {
         let decision = self.gate.decide(enabled, Instant::now());
         if decision == Decision::Stop {
             self.stop();
@@ -84,10 +84,10 @@ impl ShellStyling {
         if decision == Decision::Wait {
             info!("Explorer restarted moments ago; attaching to it on the next look");
         } else {
-            self.sync_taskbar(&colors, system_dark);
-            self.folders.sync(&colors, &mut self.gate);
+            self.sync_taskbar(&colors, material, system_dark);
+            self.folders.sync(&colors, material, &mut self.gate);
         }
-        self.hosts.sync(&colors);
+        self.hosts.sync(&colors, material);
     }
 
     /// A window of a sandboxed host, or a folder window of explorer.exe,
@@ -116,7 +116,7 @@ impl ShellStyling {
         }
     }
 
-    fn sync_taskbar(&mut self, colors: &[(Role, Color)], system_dark: bool) {
+    fn sync_taskbar(&mut self, colors: &[(Role, Color)], material: Material, system_dark: bool) {
         let taskbar = match shell_hook::taskbar() {
             Ok(taskbar) => taskbar,
             Err(error) => {
@@ -138,9 +138,15 @@ impl ShellStyling {
             }
             info!(?role, %color, system_dark, "shell colour sent");
         }
-        // After the colours: the look's glass is made in their colour.
-        if let Err(error) = shell_hook::send(taskbar.pid, Framework::System, Command::SetLook(true))
-        {
+        // After the colours: the look's glass is made in their colour;
+        // the material before the look, so the other one's rules never show.
+        let sent = shell_hook::send(
+            taskbar.pid,
+            Framework::System,
+            Command::SetMaterial(material),
+        )
+        .and_then(|_| shell_hook::send(taskbar.pid, Framework::System, Command::SetLook(true)));
+        if let Err(error) = sent {
             warn!("could not turn the shell look on: {error}");
         }
     }
@@ -211,18 +217,21 @@ impl ShellStyling {
         }
     }
 
-    /// Restores and detaches every copy of the DLL in the taskbar and the
-    /// sandboxed hosts, and restores File Explorer's folder windows (whose
-    /// copies stay attached), if any.
+    /// Restores and detaches every copy of the DLL in the sandboxed hosts,
+    /// and restores the taskbar and File Explorer's folder windows, if any.
+    /// explorer.exe's copies stay attached: attaching again in the same
+    /// explorer.exe soon after a detach has ended it (turning styling off
+    /// and on again in quick succession), and the next sync finds the copy
+    /// attached and only sends the colours and the look.
     pub fn stop(&mut self) {
         self.hosts.stop();
         self.folders.stop();
         let Ok(taskbar) = shell_hook::taskbar() else {
             return;
         };
-        match shell_hook::detach_framework(taskbar.pid, Framework::System) {
-            Ok(0) => {}
+        match shell_hook::send(taskbar.pid, Framework::System, Command::Restore) {
             Ok(windows) => info!(windows, "taskbar styling removed"),
+            Err(shell_hook::ShellHookError::NotAttached) => {}
             Err(error) => warn!("could not remove the taskbar styling: {error}"),
         }
     }

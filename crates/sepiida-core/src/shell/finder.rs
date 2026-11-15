@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use super::{
-    rules::{Rule, RuleId},
+    rules::{Rule, RuleId, Step},
     tree::{ElementTree, Handle, Verdict},
 };
 
@@ -40,6 +40,35 @@ pub struct Added {
     /// A candidate that is not (yet) under its required ancestor, with its
     /// path, for the log. Only the first few are reported.
     pub near_miss: Option<String>,
+    /// The element's child index, when a rule asks for a position of an
+    /// element of its type (`Type[n]`), for the log. Only the first few.
+    pub positioned: Option<u32>,
+}
+
+/// Child indices reported in the log, to check `Type[n]` on Windows.
+const MAX_POSITION_REPORTS: usize = 40;
+
+/// Every type named with a position, as the element or in a chain.
+fn positioned_types(rules: &[Rule]) -> Vec<&'static str> {
+    let mut types = Vec::new();
+    for rule in rules {
+        if rule.position.is_some() {
+            types.push(rule.type_name);
+        }
+        for step in rule.chain {
+            if let Step::Element {
+                type_name,
+                position: Some(_),
+                ..
+            } = *step
+            {
+                types.push(type_name);
+            }
+        }
+    }
+    types.sort_unstable();
+    types.dedup();
+    types
 }
 
 #[derive(Debug)]
@@ -52,6 +81,9 @@ pub struct Finder {
     near_misses: usize,
     /// Candidates not kept for a re-test because `pending` was full.
     pending_dropped: usize,
+    /// Types some rule asks a position of, and how many were reported.
+    positioned_types: Vec<&'static str>,
+    positioned_reports: usize,
 }
 
 impl Finder {
@@ -64,11 +96,18 @@ impl Finder {
             anchors_seen: HashSet::new(),
             near_misses: 0,
             pending_dropped: 0,
+            positioned_types: positioned_types(rules),
+            positioned_reports: 0,
         }
     }
 
     pub fn rule(&self, id: RuleId) -> Option<&'static Rule> {
         self.rules.get(id)
+    }
+
+    /// The element's place in the tree, for the log.
+    pub fn path(&self, handle: Handle) -> String {
+        self.tree.path(handle)
     }
 
     pub fn element_count(&self) -> usize {
@@ -96,11 +135,30 @@ impl Finder {
     }
 
     pub fn added(&mut self, handle: Handle, parent: Handle, type_name: &str, name: &str) -> Added {
+        self.added_at(handle, parent, None, type_name, name)
+    }
+
+    /// `added`, with the element's place among its parent's children
+    /// (for `Type[n]` selectors).
+    pub fn added_at(
+        &mut self,
+        handle: Handle,
+        parent: Handle,
+        index: Option<u32>,
+        type_name: &str,
+        name: &str,
+    ) -> Added {
         let mut result = Added::default();
-        if !self.tree.add(handle, parent, type_name, name) {
+        if !self.tree.add_at(handle, parent, index, type_name, name) {
             return result;
         }
         result.first_anchor = self.note_anchor(name);
+        if self.positioned_reports < MAX_POSITION_REPORTS
+            && self.positioned_types.contains(&type_name)
+        {
+            self.positioned_reports += 1;
+            result.positioned = index;
+        }
         for (rule, spec) in self.rules.iter().enumerate() {
             let candidate = Match { handle, rule };
             if !spec.selects(type_name, name)

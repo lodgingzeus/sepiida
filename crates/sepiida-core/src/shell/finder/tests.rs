@@ -149,6 +149,9 @@ static TWO_RULES: [Rule; 2] = [
         ancestor: None,
         parent: None,
         chain: &[],
+        position: None,
+        conditions: &[],
+        material: None,
         property: "Background",
         effect: Effect::Color {
             paint: Paint::Tint,
@@ -204,6 +207,9 @@ static UNNAMED_GRID: [Rule; 1] = [Rule {
     ancestor: Some("BackgroundControl"),
     parent: None,
     chain: &[],
+    position: None,
+    conditions: &[],
+    material: None,
     property: "Background",
     effect: Effect::Color {
         paint: Paint::Tint,
@@ -246,6 +252,7 @@ fn a_pending_candidate_is_dropped_once_its_chain_completes_without_a_match() {
 static UNDER_L1: [Step; 1] = [Step::Element {
     type_name: GRID,
     name: Name::Is("L1Grid"),
+    position: None,
 }];
 static ANY_BORDER_UNDER_L1: [Rule; 1] = [Rule {
     label: "Grid#L1Grid > Border",
@@ -254,6 +261,9 @@ static ANY_BORDER_UNDER_L1: [Rule; 1] = [Rule {
     ancestor: None,
     parent: None,
     chain: &UNDER_L1,
+    position: None,
+    conditions: &[],
+    material: None,
     property: "Background",
     effect: Effect::Color {
         paint: Paint::Tint,
@@ -283,4 +293,24 @@ fn candidates_ruled_out_by_known_parents_are_not_kept() {
     assert_eq!(finder.pending.len(), 1);
     assert_eq!(finder.added(4, 1, GRID, "L1Grid").matched.len(), 1);
     assert!(finder.pending.is_empty());
+}
+
+#[test]
+fn the_child_index_of_a_positioned_type_is_reported() {
+    static CHAIN: [Step; 1] = [Step::Element {
+        type_name: GRID,
+        name: Name::Any,
+        position: Some(1),
+    }];
+    static RULES: [Rule; 1] = [Rule {
+        chain: &CHAIN,
+        ..ANY_BORDER_UNDER_L1[0]
+    }];
+    let mut finder = Finder::new(&RULES);
+    assert_eq!(finder.added_at(1, 0, None, GRID, "").positioned, None);
+    assert_eq!(finder.added_at(2, 1, Some(1), GRID, "").positioned, Some(1));
+    let border = "Windows.UI.Xaml.Controls.Border";
+    let added = finder.added_at(3, 2, Some(0), border, "");
+    assert_eq!(added.positioned, None);
+    assert_eq!(added.matched.len(), 1);
 }

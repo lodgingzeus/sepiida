@@ -25,7 +25,7 @@ use sepiida_core::{
         framework::Framework,
         hosts::{AttachMode, Host},
         protocol::Command,
-        rules::Role,
+        rules::{Material, Role},
     },
 };
 use tracing::{info, warn};
@@ -46,6 +46,7 @@ pub struct FolderStyling {
     events: Sender<Event>,
     /// The colours to send; empty while styling is off.
     colors: Vec<(Role, Color)>,
+    material: Material,
     attaches: FolderAttaches,
 }
 
@@ -54,14 +55,16 @@ impl FolderStyling {
         Self {
             events,
             colors: Vec::new(),
+            material: Material::default(),
             attaches: FolderAttaches::default(),
         }
     }
 
     /// Styling is on with these colours (after an apply): every process
     /// with a folder window gets them, attaching first where needed.
-    pub fn sync(&mut self, colors: &[(Role, Color)], gate: &mut AttachGate) {
+    pub fn sync(&mut self, colors: &[(Role, Color)], material: Material, gate: &mut AttachGate) {
         self.colors = colors.to_vec();
+        self.material = material;
         let pids = shell_hook::explorer_window_pids();
         self.attaches.new_round(&pids);
         for pid in pids {
@@ -140,7 +143,7 @@ impl FolderStyling {
     }
 
     fn send(&self, pid: u32) {
-        match send_style(pid, Framework::WinUi, &self.colors) {
+        match send_style(pid, Framework::WinUi, &self.colors, self.material) {
             Ok(()) => info!(pid, "File Explorer colours and look sent"),
             Err(error) => warn!(pid, "could not send the File Explorer colours: {error}"),
         }

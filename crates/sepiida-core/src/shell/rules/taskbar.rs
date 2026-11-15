@@ -1,5 +1,5 @@
-//! Explorer's taskbar: the background colour rule and the segmented
-//! floating look (M5 step 3).
+//! Explorer's taskbar: the background colour rule, the base every look
+//! starts from, and the segmented floating look of M5 step 3.
 
 use super::rule::{Effect, GRID_TYPE, Name, Paint, Part, Place, RECTANGLE_TYPE, Role, Rule, look};
 use crate::shell::{
@@ -22,6 +22,9 @@ pub const TASKBAR_BACKGROUND: Rule = Rule {
     ancestor: Some(TASKBAR_FRAME_NAME),
     parent: None,
     chain: &[],
+    position: None,
+    conditions: &[],
+    material: None,
     property: "Fill",
     effect: Effect::Color {
         paint: Paint::Tint,
@@ -85,21 +88,30 @@ pub fn taskbar_bar_margin(tray: f32) -> Option<Value> {
     bar_margin(tray + PILL_SIDE, PILL_SIDE, PILL_INSET, PILL_SIDE).map(Value::Thickness)
 }
 
-/// Everything styled in Explorer's taskbar. The look (M5 step 3) is a
-/// segmented floating taskbar: Windows' background hidden; a glass bar of
+/// Windows' taskbar background hidden while the look is on.
+const HIDE_FILL: Rule = look(
+    "Windows' taskbar background",
+    TASKBAR_FILL,
+    "Visibility",
+    COLLAPSED,
+);
+const HIDE_STROKE: Rule = look("taskbar edge line", TASKBAR_STROKE, "Visibility", COLLAPSED);
+
+/// What every taskbar look starts from: Windows' background tinted with
+/// the palette, and hidden while the look is on. RosePine (`rose_pine`)
+/// draws the rest.
+pub const TASKBAR_BASE: &[Rule] = &[TASKBAR_BACKGROUND, HIDE_FILL, HIDE_STROKE];
+
+/// The segmented floating taskbar of M5 step 3, not in a rule set since
+/// RosePine (kept: the measured layout is built and tested on it): Windows' background hidden; a glass bar of
 /// our acrylic behind the buttons, from the left edge to a gap before the
 /// tray (its end measured from the tray's width); the tray its own pill.
 /// Nothing Windows lays out is moved or narrowed: it sizes the buttons
 /// from where they sit, so the buttons stay as Windows places them.
 pub const TASKBAR_RULES: &[Rule] = &[
     TASKBAR_BACKGROUND,
-    look(
-        "Windows' taskbar background",
-        TASKBAR_FILL,
-        "Visibility",
-        COLLAPSED,
-    ),
-    look("taskbar edge line", TASKBAR_STROKE, "Visibility", COLLAPSED),
+    HIDE_FILL,
+    HIDE_STROKE,
     look("bar glass", TASKBAR_BACKGROUND_GRID, "Background", GLASS),
     look(
         "bar corners",

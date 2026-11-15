@@ -196,3 +196,46 @@ fn a_parent_rule_needs_the_direct_parent_by_name() {
     tree.add(30, 29, GRID, "RootGrid");
     assert!(!tree.matches(30, &rule));
 }
+
+/// `Grid > Button[2] > Border[1]`, as a Windhawk theme writes it.
+fn second_button_border() -> Rule {
+    static CHAIN: [Step; 2] = [
+        Step::Element {
+            type_name: "Windows.UI.Xaml.Controls.Button",
+            name: Name::Any,
+            position: Some(1),
+        },
+        Step::Element {
+            type_name: GRID,
+            name: Name::Any,
+            position: None,
+        },
+    ];
+    Rule {
+        type_name: "Windows.UI.Xaml.Controls.Border",
+        name: Name::Any,
+        ancestor: None,
+        parent: None,
+        chain: &CHAIN,
+        position: Some(0),
+        conditions: &[],
+        material: None,
+        ..TASKBAR_BACKGROUND
+    }
+}
+
+#[test]
+fn a_position_picks_one_child_of_the_parent() {
+    const BUTTON: &str = "Windows.UI.Xaml.Controls.Button";
+    const BORDER: &str = "Windows.UI.Xaml.Controls.Border";
+    let mut tree = ElementTree::new();
+    tree.add(1, 0, GRID, "");
+    tree.add_at(2, 1, Some(0), BUTTON, "");
+    tree.add_at(3, 1, Some(1), BUTTON, "");
+    tree.add_at(4, 2, Some(0), BORDER, "");
+    tree.add_at(5, 3, Some(0), BORDER, "");
+    tree.add_at(6, 3, Some(1), BORDER, "");
+    // An element whose index was not reported never matches a position.
+    tree.add(7, 3, BORDER, "");
+    assert_eq!(tree.matching(&second_button_border()), vec![5]);
+}

@@ -3,8 +3,13 @@
 //! address bar and command bar over the window's backdrop, pill tabs, a
 //! centred command bar without labels, the Home and Gallery pages as an
 //! opaque rounded card, and opaque menus and tooltips (WinUI menus cannot
-//! be translucent). All target and style lines are copied unchanged. Our
-//! variables: the menus and tooltips (the theme's blur and near-opaque
+//! be translucent). Target and style lines are copied unchanged except
+//! the navigation row's widths: the theme's fixed 430 px search column and
+//! 180 px margins assume a very wide window and, on a window of about
+//! 1300 px, squeeze the address bar to nothing, so the back/forward
+//! buttons, address and search run together. Here the address and search
+//! columns share the row (search at most 430 px) and the margins are
+//! small. Our variables: the menus and tooltips (the theme's blur and near-opaque
 //! acrylic) take the palette's surface colour as a solid brush, since the
 //! blur brush and our acrylic tint are system-XAML only so far; the border
 //! gradient, the content card and the accent buttons stay as written
@@ -15,7 +20,7 @@
 
 use crate::shell::framework::Framework;
 use crate::shell::rules::{
-    Role,
+    Material, Role,
     windhawk::{Theme, Var},
 };
 
@@ -53,6 +58,7 @@ const VARS: &[(&str, Var)] = &[
 
 pub const EXPLORER: Theme = Theme {
     framework: Framework::WinUi,
+    material: Some(Material::Glass),
     targets: &[
         (
             "Microsoft.UI.Xaml.Controls.Grid#PART_LayoutRoot",
@@ -124,7 +130,7 @@ pub const EXPLORER: Theme = Theme {
             &[
                 "Background=Transparent",
                 "BorderBrush=Transparent",
-                "ColumnDefinitions:=<ColumnDefinitionCollection><ColumnDefinition Width=\"Auto\"/><ColumnDefinition Width=\"*\"/><ColumnDefinition Width=\"430\"/></ColumnDefinitionCollection>",
+                "ColumnDefinitions:=<ColumnDefinitionCollection><ColumnDefinition Width=\"Auto\"/><ColumnDefinition Width=\"*\"/><ColumnDefinition Width=\"*\" MinWidth=\"200\" MaxWidth=\"430\"/></ColumnDefinitionCollection>",
             ],
         ),
         (
@@ -261,7 +267,7 @@ pub const EXPLORER: Theme = Theme {
             "Microsoft.UI.Xaml.Controls.AutoSuggestBox#FileExplorerSearchBox > Microsoft.UI.Xaml.Controls.Grid#LayoutRoot > Microsoft.UI.Xaml.Controls.TextBox#TextBox",
             &[
                 "CornerRadius=$CornerRadius",
-                "Margin=0,0,180,0",
+                "Margin=0,0,24,0",
                 "Background=Transparent",
                 "BorderBrush=Transparent",
             ],
@@ -276,7 +282,7 @@ pub const EXPLORER: Theme = Theme {
         ),
         (
             "Microsoft.UI.Xaml.Controls.CommandBar#NavigationCommands",
-            &["Margin=180,0,0,0"],
+            &["Margin=16,0,0,0"],
         ),
         (
             "Microsoft.UI.Xaml.Controls.Grid#RootContainer",

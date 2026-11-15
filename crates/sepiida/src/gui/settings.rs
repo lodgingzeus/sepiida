@@ -14,6 +14,7 @@ use sepiida_core::{
     accent::AccentValues,
     cache::PaletteCache,
     config::Config,
+    shell::rules::Material,
     source::{ResolveError, SourceChoice, SourceKind, resolve},
 };
 use slint::ComponentHandle;
@@ -180,6 +181,7 @@ fn show_config(window: &SettingsWindow, config: &Config) {
     window.set_mode_index(mode_index(config.mode));
     window.set_accent_enabled(config.accent);
     window.set_shell_styling(config.shell_styling);
+    window.set_glass(config.material == Material::Glass);
     window.set_locked(config.locked_color.is_some());
     window.set_locked_text(
         config
@@ -213,6 +215,12 @@ fn connect(window: &SettingsWindow) {
 
     let weak = window.as_weak();
     window.on_shell_styling_toggled(move |on| update(&weak, |config| config.shell_styling = on));
+
+    let weak = window.as_weak();
+    window.on_glass_toggled(move |on| {
+        let material = if on { Material::Glass } else { Material::Solid };
+        update(&weak, |config| config.material = material);
+    });
 
     let weak = window.as_weak();
     window.on_lock_toggled(move |on| {

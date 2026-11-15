@@ -6,15 +6,16 @@
 use std::sync::OnceLock;
 
 use super::{
+    better_control::{FLYOUTS, MATERIALS},
+    down_aero::START,
     flyouts::FLYOUT_OVERLAYS,
+    matter::EXPLORER as MATTER_EXPLORER,
+    rose_pine::TASKBAR as ROSE_PINE_TASKBAR,
     rule::Rule,
     start::START_RULES,
-    taskbar::TASKBAR_RULES,
-    windhawk::{Skipped, Theme, build_all},
-    window_glass::{
-        EXPLORER, FLYOUT_ADDITIONS, FLYOUT_CONTROLS, FLYOUT_PANELS, START, TASKBAR,
-        TASKBAR_ADDITIONS,
-    },
+    taskbar::TASKBAR_BASE,
+    windhawk::{Skipped, Theme, build_on},
+    window_glass::{EXPLORER, POPUPS, TASKBAR, TASKBAR_ADDITIONS},
 };
 use crate::shell::{framework::Framework, hosts::Host};
 
@@ -26,11 +27,9 @@ struct RuleSet {
 impl RuleSet {
     /// Our hand-written rules first, then the themes' rules.
     fn new(own: &[Rule], themes: &[&Theme]) -> Self {
-        let built = build_all(themes);
-        let mut rules = own.to_vec();
-        rules.extend(built.rules);
+        let built = build_on(own, themes);
         Self {
-            rules,
+            rules: built.rules,
             skipped: built.skipped,
         }
     }
@@ -38,7 +37,12 @@ impl RuleSet {
 
 fn taskbar() -> &'static RuleSet {
     static SET: OnceLock<RuleSet> = OnceLock::new();
-    SET.get_or_init(|| RuleSet::new(TASKBAR_RULES, &[&TASKBAR, &TASKBAR_ADDITIONS]))
+    SET.get_or_init(|| {
+        RuleSet::new(
+            TASKBAR_BASE,
+            &[&TASKBAR, &TASKBAR_ADDITIONS, &ROSE_PINE_TASKBAR],
+        )
+    })
 }
 
 fn start() -> &'static RuleSet {
@@ -48,17 +52,12 @@ fn start() -> &'static RuleSet {
 
 fn flyouts() -> &'static RuleSet {
     static SET: OnceLock<RuleSet> = OnceLock::new();
-    SET.get_or_init(|| {
-        RuleSet::new(
-            FLYOUT_OVERLAYS,
-            &[&FLYOUT_PANELS, &FLYOUT_CONTROLS, &FLYOUT_ADDITIONS],
-        )
-    })
+    SET.get_or_init(|| RuleSet::new(FLYOUT_OVERLAYS, &[&POPUPS, &FLYOUTS, &MATERIALS]))
 }
 
 fn file_explorer() -> &'static RuleSet {
     static SET: OnceLock<RuleSet> = OnceLock::new();
-    SET.get_or_init(|| RuleSet::new(&[], &[&EXPLORER]))
+    SET.get_or_init(|| RuleSet::new(&[], &[&EXPLORER, &MATTER_EXPLORER]))
 }
 
 fn empty() -> &'static RuleSet {
@@ -140,19 +139,16 @@ mod tests {
                 assert_ne!(feature, "unexpected", "{host:?}: {target}");
             }
         }
-        assert!(skipped(Host::Explorer).is_empty());
-        let start: Vec<&str> = skipped(Host::StartMenu).iter().map(|s| s.0).collect();
+        // RosePine's running-app ring (`rose_pine`).
         assert_eq!(
-            start,
-            [
-                "Windows.UI.Xaml.Controls.Grid#UndockedRoot",
-                "Windows.UI.Xaml.Controls.GridView#PinnedList > Border > Windows.UI.Xaml.Controls.ScrollViewer",
-            ]
+            skipped(Host::Explorer),
+            [(
+                "Grid#IconPanel@CommonStates > Rectangle#RunningIndicator, Taskbar.TaskListLabeledButtonPanel@CommonStates > Rectangle#RunningIndicator",
+                "@VisualState",
+            )]
         );
-        // Quick settings button corners ([Property=Value]), media layout
-        // and the toast peek position (Grid.Row/Column), media button
-        // colours (@CommonStates).
-        assert_eq!(skipped(Host::ShellHost).len(), 13);
+        assert!(skipped(Host::StartMenu).is_empty());
+        assert!(skipped(Host::ShellHost).is_empty());
     }
 
     #[test]
@@ -212,7 +208,53 @@ mod tests {
             .into_iter()
             .map(|(_, feature)| feature)
             .collect();
-        assert_eq!(left_out, ["@VisualState", "@VisualState"]);
+        // Two of WindowGlass's, two of Matter's (tab and search box states).
+        assert_eq!(left_out, ["@VisualState"; 4]);
+    }
+
+    /// Whether two rules' materials meet (both hold at some time).
+    fn overlap(
+        a: Option<crate::shell::rules::Material>,
+        b: Option<crate::shell::rules::Material>,
+    ) -> bool {
+        a.is_none() || b.is_none() || a == b
+    }
+
+    /// Colours hold whatever the material; only look rules are for one.
+    #[test]
+    fn colour_rules_hold_for_both_materials_and_both_have_looks() {
+        use crate::shell::rules::Material;
+        for (host, framework) in every_set() {
+            let rules = rules_for(host, framework);
+            for rule in rules {
+                if let Effect::Color { .. } = rule.effect {
+                    assert_eq!(rule.material, None, "{host:?}: {}", rule.label);
+                }
+            }
+            for material in [Material::Glass, Material::Solid] {
+                assert!(
+                    rules.iter().any(|r| r.material == Some(material)),
+                    "{host:?} {framework:?}: no {material:?} rules"
+                );
+            }
+        }
+    }
+
+    /// Every theme XAML value is one the DLL will load.
+    #[test]
+    fn every_xaml_value_is_a_document() {
+        use crate::shell::layout::Value;
+        for (host, framework) in every_set() {
+            for rule in rules_for(host, framework) {
+                if let Effect::Set(Value::Xaml(text)) = rule.effect {
+                    assert!(
+                        crate::shell::markup::document(text).is_some(),
+                        "{host:?}: {}: {text}",
+                        rule.label
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -222,9 +264,12 @@ mod tests {
             for (i, a) in rules.iter().enumerate() {
                 for b in &rules[i + 1..] {
                     assert!(
-                        !(a.type_name == b.type_name
+                        !(overlap(a.material, b.material)
+                            && a.type_name == b.type_name
                             && a.name == b.name
                             && a.chain == b.chain
+                            && a.position == b.position
+                            && a.conditions == b.conditions
                             && a.property == b.property
                             && is_look(a) == is_look(b)),
                         "{host:?}: {} and {}",

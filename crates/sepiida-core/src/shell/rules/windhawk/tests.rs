@@ -2,7 +2,7 @@ use super::*;
 use crate::shell::{
     framework::Framework,
     layout::Value,
-    rules::{Effect, Name, Paint, Role, Step},
+    rules::{Condition, Effect, Material, Name, Paint, Role, Step},
     tree::ElementTree,
 };
 
@@ -46,11 +46,13 @@ fn ancestors_are_listed_nearest_first() {
             Step::Element {
                 type_name: GRID,
                 name: Name::Is("L1Grid"),
+                position: None,
             },
             Step::AnyDepth,
             Step::Element {
                 type_name: "A.Page",
                 name: Name::Is("Root"),
+                position: None,
             },
         ]
     );
@@ -65,9 +67,56 @@ fn commas_split_targets_except_inside_brackets() {
     .unwrap();
     assert_eq!(targets.len(), 2);
     assert_eq!(targets[1].name, Name::Is("ToastBackgroundBorder2"));
+    let targets = parse_targets(
+        "Grid[AutomationProperties.Name=a,b], Border",
+        Framework::System,
+    )
+    .unwrap();
+    assert_eq!(targets.len(), 2);
     assert_eq!(
-        parse_targets("Grid[AutomationProperties.Name=a,b]", Framework::System),
-        Err(SelectorError::Unsupported("[index] or [Property=Value]"))
+        targets[0].conditions,
+        &[Condition {
+            property: "AutomationProperties.Name",
+            value: "a,b",
+        }]
+    );
+}
+
+#[test]
+fn property_conditions_go_on_the_element() {
+    let targets = parse_targets(
+        "Taskbar.ExperienceToggleButton#LaunchListButton[AutomationProperties.AutomationId=StartButton]",
+        Framework::System,
+    )
+    .unwrap();
+    assert_eq!(targets[0].name, Name::Is("LaunchListButton"));
+    assert_eq!(
+        targets[0].conditions,
+        &[Condition {
+            property: "AutomationProperties.AutomationId",
+            value: "StartButton",
+        }]
+    );
+    // A value may hold the markers; two conditions and an index mix.
+    let targets = parse_targets("TextBlock[Text=#a@b][2][Tag = x ]", Framework::System).unwrap();
+    assert_eq!(targets[0].position, Some(1));
+    assert_eq!(
+        targets[0].conditions,
+        &[
+            Condition {
+                property: "Text",
+                value: "#a@b",
+            },
+            Condition {
+                property: "Tag",
+                value: "x",
+            },
+        ]
+    );
+    assert_eq!(
+        parse_targets("TextBlock[Text=\u{E971}]", Framework::System).unwrap()[0].conditions[0]
+            .value,
+        "\u{E971}"
     );
 }
 
@@ -87,9 +136,17 @@ fn bad_and_unsupported_selectors_are_reported() {
             SelectorError::Unsupported("@VisualState"),
         ),
         (
-            "Grid[2]",
-            SelectorError::Unsupported("[index] or [Property=Value]"),
+            "Grid[Text=a] > Border",
+            SelectorError::Unsupported("[Property=Value] on an ancestor"),
         ),
+        ("Grid[=a]", SelectorError::BadCondition),
+        ("Grid[Text=]", SelectorError::BadCondition),
+        ("Grid[Text=a", SelectorError::BadIndex),
+        ("Grid[0]", SelectorError::BadIndex),
+        ("Grid[x]", SelectorError::BadIndex),
+        ("Grid[-1]", SelectorError::BadIndex),
+        ("Grid[2", SelectorError::BadIndex),
+        ("Grid[1][2]", SelectorError::BadIndex),
     ] {
         assert_eq!(
             parse_targets(text, Framework::System),
@@ -97,6 +154,23 @@ fn bad_and_unsupported_selectors_are_reported() {
             "{text:?}"
         );
     }
+}
+
+#[test]
+fn a_child_index_is_kept_zero_based_on_the_element_and_its_ancestors() {
+    let target = one("Grid > GridViewItem[2] > Border[ 1 ]#Inner");
+    assert_eq!(target.type_name, BORDER);
+    assert_eq!(target.name, Name::Is("Inner"));
+    assert_eq!(target.position, Some(0));
+    assert_eq!(
+        target.chain[0],
+        Step::Element {
+            type_name: "Windows.UI.Xaml.Controls.GridViewItem",
+            name: Name::Any,
+            position: Some(1),
+        }
+    );
+    assert_eq!(one("Grid").position, None);
 }
 
 #[test]
@@ -117,8 +191,15 @@ fn styles_split_into_property_and_value() {
     );
     assert_eq!(parse_style("Background"), Err(StyleError::NoEquals));
     assert_eq!(parse_style("=1"), Err(StyleError::EmptyProperty));
+    assert_eq!(
+        parse_style("Grid.Column = 1"),
+        Ok(Style {
+            property: "Grid.Column",
+            value: StyleValue::Text("1"),
+        })
+    );
     assert!(matches!(
-        parse_style("Grid.Column=1"),
+        parse_style("A.B.C=1"),
         Err(StyleError::Unsupported(_))
     ));
     assert!(matches!(
@@ -155,6 +236,7 @@ const VARS: &[(&str, Var)] = &[
 fn effects(target: &'static str, styles: &'static [&'static str]) -> Built {
     let theme = Theme {
         framework: Framework::System,
+        material: None,
         targets: Box::leak(vec![(target, styles)].into_boxed_slice()),
         vars: VARS,
     };
@@ -208,7 +290,10 @@ fn variables_become_our_colours_and_text_becomes_look_values() {
 #[test]
 fn an_entry_with_anything_unsupported_is_skipped_whole() {
     for (target, styles) in [
-        ("Grid#ThumbnailImage", &["Width=300", "Grid.Column=1"][..]),
+        (
+            "Grid#ThumbnailImage",
+            &["Width=300", "Grid.Column:=<Grid/>"][..],
+        ),
         (
             "Grid",
             &["Background:=<WindhawkBlur BlurAmount=\"9999\"/>"][..],
@@ -369,6 +454,7 @@ fn acrylic_and_xaml_variables_are_look_values() {
 fn a_later_line_for_the_same_target_and_property_wins() {
     let theme = Theme {
         framework: Framework::System,
+        material: None,
         targets: &[
             ("Grid#A", &["Width=1", "Height=2"]),
             ("Grid#B", &["Width=3"]),
@@ -402,6 +488,146 @@ fn a_later_line_for_the_same_target_and_property_wins() {
             // later colour of the same kind.
             ("Grid#A", "Background", Effect::Set(blur)),
             ("Grid#A", "Background", tint),
+        ]
+    );
+}
+
+#[test]
+fn lines_for_other_children_or_conditions_do_not_replace_each_other() {
+    let theme = Theme {
+        framework: Framework::System,
+        material: None,
+        targets: &[
+            ("Grid[1], Grid[Tag=a]", &["Width=1"]),
+            ("Grid[2], Grid[Tag=b]", &["Width=2"]),
+            ("Grid[2]", &["Width=3"]),
+        ],
+        vars: VARS,
+    };
+    let got: Vec<(&str, Effect)> = build(&theme)
+        .rules
+        .iter()
+        .map(|r| (r.label, r.effect))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("Grid[1], Grid[Tag=a]", Effect::Set(Value::Text("1"))),
+            ("Grid[1], Grid[Tag=a]", Effect::Set(Value::Text("1"))),
+            ("Grid[2], Grid[Tag=b]", Effect::Set(Value::Text("2"))),
+            ("Grid[2]", Effect::Set(Value::Text("3"))),
+        ]
+    );
+}
+
+#[test]
+fn a_theme_line_replaces_a_hand_written_rule_for_the_same_slot() {
+    use crate::shell::rules::sandboxed::tinted;
+    let theme = Theme {
+        framework: Framework::System,
+        material: None,
+        targets: &[("Border#A", &["Background:=$Base"])],
+        vars: VARS,
+    };
+    let base = [tinted("Mine A", BORDER, "A"), tinted("Mine B", BORDER, "B")];
+    let built = build_on(&base, &[&theme]);
+    let labels: Vec<&str> = built.rules.iter().map(|r| r.label).collect();
+    assert_eq!(labels, ["Mine B", "Border#A"]);
+}
+
+#[test]
+fn an_attached_property_is_a_plain_look_value_in_system_xaml_only() {
+    let built = effects(
+        "ContentControl#SlidersGroup",
+        &["Grid.Row=0", "Canvas.ZIndex:=-99"],
+    );
+    let got: Vec<(&str, Effect)> = built.rules.iter().map(|r| (r.property, r.effect)).collect();
+    assert_eq!(
+        got,
+        [
+            ("Grid.Row", Effect::Set(Value::Text("0"))),
+            ("Canvas.ZIndex", Effect::Set(Value::Text("-99"))),
+        ]
+    );
+    let winui = Theme {
+        framework: Framework::WinUi,
+        material: None,
+        targets: &[("Grid#A", &["Grid.Row=0"])],
+        vars: VARS,
+    };
+    let built = build(&winui);
+    assert!(built.rules.is_empty());
+    assert!(
+        built.skipped[0].reason.contains("WinUI 3"),
+        "{}",
+        built.skipped[0].reason
+    );
+}
+
+#[test]
+fn colours_on_brush_properties_become_brushes() {
+    let built = effects(
+        "Border",
+        &[
+            "Background:=#09FFFFFF",
+            "BorderBrush=transparent",
+            "Fill=Red",
+            "Width=Red",
+        ],
+    );
+    let got: Vec<(&str, Effect)> = built.rules.iter().map(|r| (r.property, r.effect)).collect();
+    assert_eq!(
+        got,
+        [
+            (
+                "Background",
+                Effect::Set(Value::Xaml("<SolidColorBrush Color=\"#09FFFFFF\" />"))
+            ),
+            ("BorderBrush", Effect::Set(Value::Transparent)),
+            (
+                "Fill",
+                Effect::Set(Value::Xaml("<SolidColorBrush Color=\"Red\" />"))
+            ),
+            ("Width", Effect::Set(Value::Text("Red"))),
+        ]
+    );
+}
+
+#[test]
+fn a_later_line_replaces_both_twins_or_narrows_a_rule_for_both() {
+    const PAIR: Var = Var::Material {
+        glass: &Var::Acrylic(Role::Surface),
+        solid: &Var::Fill(Role::Surface),
+    };
+    let vars: &'static [(&str, Var)] = &[("Pair", PAIR), ("Glass", Var::Acrylic(Role::Accent))];
+    let theme = Theme {
+        framework: Framework::System,
+        material: None,
+        targets: &[
+            ("Border#A", &["Background:=$Pair"]),
+            ("Border#A", &["Background=Red"]),
+            ("Border#B", &["Background=Red"]),
+        ],
+        vars,
+    };
+    let later = Theme {
+        framework: Framework::System,
+        material: Some(Material::Glass),
+        targets: &[("Border#B", &["Background:=$Glass"])],
+        vars,
+    };
+    let built = build_all(&[&theme, &later]);
+    let got: Vec<(&str, Option<Material>)> =
+        built.rules.iter().map(|r| (r.label, r.material)).collect();
+    assert_eq!(
+        got,
+        [
+            // The untagged later line replaced both of A's twins.
+            ("Border#A", None),
+            // B's line for both now holds for solid only; glass is the
+            // later theme's.
+            ("Border#B", Some(Material::Solid)),
+            ("Border#B", Some(Material::Glass)),
         ]
     );
 }

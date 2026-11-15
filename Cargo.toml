@@ -26,6 +26,7 @@ notify = "8"
 directories = "6"
 slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "system-tray"] }
 slint-build = "1.18"
+embed-resource = "3.0"
 windows-core = "0.62"
 windows = { version = "0.62", features = [
     "Foundation",

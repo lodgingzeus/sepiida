@@ -25,3 +25,4 @@ tempfile.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
+embed-resource.workspace = true

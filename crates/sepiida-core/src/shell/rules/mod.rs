@@ -5,8 +5,14 @@
 //! set (`rules_for`): hand-written colour rules and the taskbar's floating
 //! bar, with Windhawk theme lines on top (`windhawk`, `window_glass`).
 
+mod better_control;
 mod by_host;
+mod down_aero;
+mod edge;
 mod flyouts;
+mod glass;
+mod matter;
+mod rose_pine;
 mod rule;
 mod sandboxed;
 mod start;
@@ -16,7 +22,10 @@ mod window_glass;
 
 pub use by_host::{rules_for, skipped_for};
 pub use rule::{
-    BORDER_TYPE, Effect, GRID_TYPE, Name, Paint, Part, RECTANGLE_TYPE, Role, Rule, RuleId, Step,
+    BORDER_TYPE, Condition, Effect, GRID_TYPE, Material, Name, Paint, Part, RECTANGLE_TYPE, Role,
+    Rule, RuleId, Step,
 };
 pub use start::START_RULES;
-pub use taskbar::{TASKBAR_BACKGROUND, TASKBAR_FRAME_NAME, TASKBAR_RULES, taskbar_bar_margin};
+pub use taskbar::{
+    TASKBAR_BACKGROUND, TASKBAR_BASE, TASKBAR_FRAME_NAME, TASKBAR_RULES, taskbar_bar_margin,
+};

@@ -31,6 +31,38 @@ impl Role {
     }
 }
 
+/// The look's material, a setting: glass (translucent) or solid. Look
+/// rules may hold for one only; colour rules hold for both.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+#[repr(u8)]
+pub enum Material {
+    #[default]
+    Glass = 0,
+    Solid = 1,
+}
+
+impl Material {
+    pub const fn id(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_id(id: u8) -> Option<Self> {
+        [Self::Glass, Self::Solid]
+            .into_iter()
+            .find(|m| m.id() == id)
+    }
+
+    pub const fn other(self) -> Self {
+        match self {
+            Self::Glass => Self::Solid,
+            Self::Solid => Self::Glass,
+        }
+    }
+}
+
 /// How a rule's property gets the role's colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Paint {
@@ -94,10 +126,23 @@ impl Name {
 /// One ancestor in a rule's chain (Windhawk's `Parent > Child`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
-    /// The next ancestor up has this type and name.
-    Element { type_name: &'static str, name: Name },
+    /// The next ancestor up has this type and name, and is its parent's
+    /// child at `position` (0-based) when one is given.
+    Element {
+        type_name: &'static str,
+        name: Name,
+        position: Option<u32>,
+    },
     /// Any number of ancestors, none included (Windhawk's `*`).
     AnyDepth,
+}
+
+/// A property value an element must hold locally: `Property` (or an
+/// attached `Owner.Property`) parsed as XAML would parse `Value`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Condition {
+    pub property: &'static str,
+    pub value: &'static str,
 }
 
 /// One kind of element to style.
@@ -118,6 +163,14 @@ pub struct Rule {
     /// The ancestors the element must have, nearest first: its parent
     /// matches the first step, and so on up. Empty for no constraint.
     pub chain: &'static [Step],
+    /// The element's place among its parent's children (0-based), for a
+    /// Windhawk `Type[n]`; `None` for any.
+    pub position: Option<u32>,
+    /// Property values the element must hold locally (Windhawk's
+    /// `Type[Property=Value]`), checked by the DLL when it is found.
+    pub conditions: &'static [Condition],
+    /// The material a look rule holds for; `None` for both.
+    pub material: Option<Material>,
     /// The property the rule changes.
     pub property: &'static str,
     pub effect: Effect,
@@ -155,6 +208,9 @@ pub(super) const fn look(
         ancestor,
         parent,
         chain: &[],
+        position: None,
+        conditions: &[],
+        material: None,
         property,
         effect: Effect::Set(value),
     }
@@ -191,6 +247,9 @@ mod tests {
             ancestor: None,
             parent: None,
             chain: &[],
+            position: None,
+            conditions: &[],
+            material: None,
             property: "Fill",
             effect: Effect::Probe,
         };

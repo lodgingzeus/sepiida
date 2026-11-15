@@ -85,6 +85,9 @@ pub enum Value {
     /// would cover the surface's glass. A local original is held and put
     /// back.
     Transparent,
+    /// A solid brush of the role's colour, made by the DLL: the solid
+    /// material's surfaces. A local original is held and put back.
+    Solid(Role),
     /// A value as XAML markup writes it (`8`, `0,4,0,4`, `Center`), made
     /// by XAML from the string and the property's type. From Windhawk
     /// theme lines; never XAML markup itself (`is_valid`).
@@ -137,7 +140,7 @@ impl Value {
             Self::Length(_) | Self::Auto => ".Double",
             Self::HorizontalAlignment(_) => ".HorizontalAlignment",
             Self::Visibility(_) => ".Visibility",
-            Self::Acrylic(_) | Self::Transparent | Self::Blur { .. } => ".Brush",
+            Self::Acrylic(_) | Self::Transparent | Self::Solid(_) | Self::Blur { .. } => ".Brush",
             // Any type: XAML says whether the string fits.
             Self::Text(_) | Self::Xaml(_) => "",
         }
@@ -155,6 +158,7 @@ impl Value {
             | Self::HorizontalAlignment(_)
             | Self::Visibility(_)
             | Self::Acrylic(_)
+            | Self::Solid(_)
             | Self::Transparent => true,
             Self::Text(text) => {
                 !text.is_empty()
@@ -183,7 +187,11 @@ impl Value {
             // or only NaN is not documented.
             Self::Auto => vec!["Auto".to_owned(), "NaN".to_owned()],
             // Not made from a string (`Make::Acrylic`, `Make::Transparent`).
-            Self::Acrylic(_) | Self::Transparent | Self::Xaml(_) | Self::Blur { .. } => Vec::new(),
+            Self::Acrylic(_)
+            | Self::Transparent
+            | Self::Solid(_)
+            | Self::Xaml(_)
+            | Self::Blur { .. } => Vec::new(),
             Self::Text(text) => vec![text.to_owned()],
         }
     }
@@ -197,6 +205,7 @@ impl fmt::Display for Value {
             Self::Auto => f.write_str("Auto"),
             Self::Acrylic(role) => write!(f, "acrylic in the {role:?} colour"),
             Self::Transparent => f.write_str("transparent"),
+            Self::Solid(role) => write!(f, "solid {role:?} colour"),
             Self::Text(text) => f.write_str(text),
             Self::Xaml(text) => write!(f, "XAML {text}"),
             Self::Blur {
@@ -291,6 +300,8 @@ pub enum Make {
     Acrylic(Role),
     /// The DLL's transparent brush.
     Transparent,
+    /// A solid brush of the role's colour, made by the DLL.
+    Solid(Role),
     /// `XamlReader.Load` of this document (`markup::document`).
     Xaml(String),
     /// The DLL's blur brush.
@@ -321,10 +332,6 @@ pub enum Skip {
     /// An animation or a visual state sets the property: a local value
     /// would either be overridden or fight it as the element is used.
     Driven(ValueSource),
-    /// The property holds a local object (a brush). It
-    /// cannot be made again from the chain's string, so it could not be
-    /// put back.
-    LocalObject,
 }
 
 impl fmt::Display for Skip {
@@ -335,7 +342,6 @@ impl fmt::Display for Skip {
                 write!(f, "the property is a {found}, not a *{expected}")
             }
             Self::Driven(source) => write!(f, "the property is set by {source:?}"),
-            Self::LocalObject => f.write_str("the property holds a local object"),
         }
     }
 }
@@ -357,15 +363,16 @@ pub fn plan_write(value: &Value, current: &Current<'_>) -> Result<Write, Skip> {
         ValueSource::Animation | ValueSource::VisualState => {
             return Err(Skip::Driven(current.source));
         }
-        ValueSource::Local if matches!(value, Value::Acrylic(_)) => {
-            return Err(Skip::LocalObject);
-        }
         // A brush's chain string is not the brush: hold the object.
         ValueSource::Local
             if current.value.is_empty()
                 || matches!(
                     value,
-                    Value::Transparent | Value::Xaml(_) | Value::Blur { .. }
+                    Value::Acrylic(_)
+                        | Value::Transparent
+                        | Value::Solid(_)
+                        | Value::Xaml(_)
+                        | Value::Blur { .. }
                 ) =>
         {
             Restore::Hold
@@ -385,6 +392,7 @@ pub fn plan_write(value: &Value, current: &Current<'_>) -> Result<Write, Skip> {
     let make = match *value {
         Value::Acrylic(role) => Make::Acrylic(role),
         Value::Transparent => Make::Transparent,
+        Value::Solid(role) => Make::Solid(role),
         Value::Blur {
             amount,
             role,

@@ -11,7 +11,7 @@ use std::{io, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Color, accent::ThemeMode, fsio, source::SourceChoice};
+use crate::{Color, accent::ThemeMode, fsio, shell::rules::Material, source::SourceChoice};
 
 /// A hand-edited settings file is a few hundred bytes.
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
@@ -65,8 +65,8 @@ pub struct Config {
     pub accent: bool,
     /// Restyle the taskbar, Start menu and notification centre (M4).
     pub shell_styling: bool,
-    /// Translucent shell surfaces; experimental (M5).
-    pub glass: bool,
+    /// The look's material: glass (translucent) or solid.
+    pub material: Material,
     /// When set, this colour is used instead of the wallpaper's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locked_color: Option<Color>,
@@ -79,7 +79,7 @@ impl Default for Config {
             mode: ModeSetting::default(),
             accent: true,
             shell_styling: false,
-            glass: false,
+            material: Material::Glass,
             locked_color: None,
         }
     }
@@ -143,7 +143,8 @@ mod tests {
         assert_eq!(config.mode, ModeSetting::Unchanged);
         assert_eq!(config.mode.theme_mode(0), None);
         assert!(config.accent);
-        assert!(!config.shell_styling && !config.glass);
+        assert!(!config.shell_styling);
+        assert_eq!(config.material, Material::Glass);
         assert_eq!(config.locked_color, None);
     }
 
@@ -171,7 +172,7 @@ mod tests {
             mode: ModeSetting::Dark,
             accent: false,
             shell_styling: true,
-            glass: true,
+            material: Material::Solid,
             locked_color: Some(Color::new(0x12, 0xab, 0xef)),
         };
         let text = config.to_toml().expect("encode");
@@ -219,18 +220,18 @@ mod tests {
         assert!(error.is_none());
 
         let saved = Config {
-            glass: true,
+            material: Material::Solid,
             ..Config::default()
         };
         saved.save(&path).expect("save");
         assert_eq!(Config::load(&path).expect("load"), Some(saved));
 
-        std::fs::write(&path, b"glass = maybe").expect("write");
+        std::fs::write(&path, b"accent = maybe").expect("write");
         let (config, error) = Config::load_or_default(&path);
         assert_eq!(config, Config::default());
         assert!(matches!(error, Some(ConfigError::Parse(_))));
         // The broken file is left for the user to fix.
-        assert_eq!(std::fs::read(&path).expect("read"), b"glass = maybe");
+        assert_eq!(std::fs::read(&path).expect("read"), b"accent = maybe");
 
         std::fs::write(&path, [0xff, 0xfe]).expect("write");
         assert!(matches!(Config::load(&path), Err(ConfigError::Read(_))));

@@ -11,8 +11,11 @@ use std::{
 use sepiida_core::{
     Color,
     shell::{
-        attach_request::AttachRequest, finder::Finder, hosts::AttachMode, protocol::Command,
-        rules::Role,
+        attach_request::AttachRequest,
+        finder::Finder,
+        hosts::AttachMode,
+        protocol::Command,
+        rules::{Material, Role},
     },
 };
 use windows::{
@@ -42,6 +45,8 @@ struct UiState {
     styler: Styler,
     /// File Explorer's glass behind this thread's folder windows.
     backdrop: WindowBackdrop,
+    /// The look's material; glass until told.
+    material: Material,
     last_recheck: Option<Instant>,
 }
 
@@ -55,7 +60,16 @@ impl UiState {
 
     fn set_look(&mut self, on: bool) {
         self.styler.set_look(on);
-        self.backdrop.set_look(on);
+        self.backdrop
+            .set_look(on && self.material == Material::Glass);
+    }
+
+    /// The solid material has no window glass in File Explorer.
+    fn set_material(&mut self, material: Material) {
+        self.material = material;
+        self.styler.set_material(material);
+        let look = self.styler.look_on();
+        self.backdrop.set_look(look && material == Material::Glass);
     }
 
     /// Puts back everything Windows had: the original values and backdrop.
@@ -191,6 +205,7 @@ fn on_change(
                     framework,
                 ),
                 backdrop: WindowBackdrop::new(framework),
+                material: Material::Glass,
                 last_recheck: None,
             });
             if let Some(state) = slot.as_mut() {
@@ -217,11 +232,21 @@ fn on_change(
 
         let name = element.Name.to_string();
         let type_name = element.Type.to_string();
-        let added = state
-            .finder
-            .added(element.Handle, relation.Parent, &type_name, &name);
+        // XAML's child index (0-based, as `VisualTreeHelper.GetChild`),
+        // for `Type[n]` selectors; meaningless for a root.
+        let index = (relation.Parent != 0).then_some(relation.ChildIndex);
+        let added =
+            state
+                .finder
+                .added_at(element.Handle, relation.Parent, index, &type_name, &name);
         if let Some(anchor) = added.first_anchor {
             log!("found {anchor} ({type_name})");
+        }
+        if let Some(index) = added.positioned {
+            log!(
+                "child index {index} (0-based): {}",
+                state.finder.path(element.Handle)
+            );
         }
         if let Some(path) = added.near_miss {
             log!("candidate not under its required ancestor (yet): {path}");
@@ -260,6 +285,7 @@ fn start_like_the_others(state: &mut UiState, watcher: &Watcher) {
     for &(role, opacity) in carried.opacities() {
         state.styler.set_opacity(role, opacity);
     }
+    state.set_material(carried.material());
     if carried.look() {
         log!("look on, as on the attachment's other threads");
         state.set_look(true);
@@ -319,6 +345,12 @@ pub fn run_command(command: Command) {
                         // Again once the new layout has settled.
                         control::schedule_relayout();
                     }
+                }
+                None
+            }
+            Command::SetMaterial(material) => {
+                if let Some(state) = slot.as_mut() {
+                    state.set_material(material);
                 }
                 None
             }

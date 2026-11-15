@@ -1,8 +1,8 @@
 //! Windhawk style lines: `Property=Value`, made by XAML from the string,
 //! and `Property:=<xaml>`, a XAML object (loaded by the DLL, `markup`). Not
 //! supported yet, and reported
-//! as such: `Property@State=Value` (visual states), `Property=>Var`
-//! (captures) and attached properties (`Grid.Column`).
+//! as such: `Property@State=Value` (visual states) and `Property=>Var`
+//! (captures). Attached properties (`Grid.Column`) are read like others.
 
 use std::fmt;
 
@@ -53,8 +53,10 @@ pub fn parse_style(text: &'static str) -> Result<Style, StyleError> {
     if property.is_empty() {
         return Err(StyleError::EmptyProperty);
     }
-    if property.contains('.') {
-        return Err(StyleError::Unsupported("an attached property"));
+    if property.contains('.') && !crate::shell::markup::is_attached(property) {
+        return Err(StyleError::Unsupported(
+            "a dotted name other than Owner.Property",
+        ));
     }
     let value = value.trim();
     Ok(Style {

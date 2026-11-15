@@ -13,14 +13,14 @@ use sepiida_core::{
     shell::{
         finder::Match,
         framework::Framework,
-        rules::{Effect, Paint, Role, Rule},
+        rules::{Effect, Material, Paint, Role, Rule, RuleId},
         tint::Opacity,
         tree::Handle,
     },
 };
 use windows::core::IUnknown;
 
-use super::{layout::Layouts, solid::SolidBrushes, tint::Tints};
+use super::{condition, layout::Layouts, solid::SolidBrushes, tint::Tints};
 use crate::{
     log::log,
     properties::Xaml,
@@ -61,7 +61,12 @@ pub struct Styler {
     tints: Tints,
     layouts: Layouts,
     targets: HashMap<Match, Target>,
+    /// Logged property-condition misses per rule.
+    condition_misses: HashMap<RuleId, u8>,
 }
+
+/// How many property-condition misses are logged per rule.
+const MAX_CONDITION_MISSES: u8 = 5;
 
 impl Styler {
     pub fn new(
@@ -77,12 +82,16 @@ impl Styler {
             tints: Tints::default(),
             layouts: Layouts::default(),
             targets: HashMap::new(),
+            condition_misses: HashMap::new(),
         }
     }
 
     /// An element `rule` styles appeared. Paints it if its role has a
     /// colour.
     pub fn found(&mut self, found: Match, rule: &'static Rule) {
+        if !rule.conditions.is_empty() && !self.meets(found, rule) {
+            return;
+        }
         let (paint, role) = match rule.effect {
             Effect::Color { paint, role } => (paint, role),
             Effect::Measure(part) => {
@@ -95,8 +104,13 @@ impl Styler {
                 return;
             }
             Effect::Set(value) => {
-                self.layouts
-                    .found(&self.xaml, found, rule.label, rule.property, value);
+                self.layouts.found(
+                    &self.xaml,
+                    found,
+                    rule.label,
+                    rule.property,
+                    (value, rule.material),
+                );
                 return;
             }
         };
@@ -142,6 +156,38 @@ impl Styler {
             Paint::Solid if self.ensure_brush(role) => self.paint(found),
             Paint::Tint => self.tint(found),
             Paint::Solid | Paint::LogOnly => {}
+        }
+    }
+
+    /// Whether the element holds the rule's property conditions; logged
+    /// when it does, the first few times per rule it does not, and when
+    /// they cannot be checked.
+    fn meets(&mut self, found: Match, rule: &Rule) -> bool {
+        match condition::check(&self.xaml, found.handle, rule.type_name, rule.conditions) {
+            Ok(None) => {
+                log!(
+                    "{} {:#x}: property conditions hold",
+                    rule.label,
+                    found.handle
+                );
+                true
+            }
+            Ok(Some(read)) => {
+                let misses = self.condition_misses.entry(found.rule).or_default();
+                if *misses < MAX_CONDITION_MISSES {
+                    *misses += 1;
+                    log!("{} {:#x}: no match: {read}", rule.label, found.handle);
+                }
+                false
+            }
+            Err(why) => {
+                log!(
+                    "{} {:#x}: property conditions not checked: {why}",
+                    rule.label,
+                    found.handle
+                );
+                false
+            }
         }
     }
 
@@ -215,13 +261,21 @@ impl Styler {
         self.layouts.set_on(&self.xaml, on);
     }
 
+    /// Switches the look's material.
+    pub fn set_material(&mut self, material: Material) {
+        self.layouts.set_material(&self.xaml, material);
+    }
+
     pub fn look_on(&self) -> bool {
         self.layouts.is_on()
     }
 
     /// Re-measures the look's layout.
+    /// After tree activity has settled: the measured layout, and every
+    /// brush or size Windows may have replaced meanwhile.
     pub fn relayout(&mut self) {
         self.layouts.relayout(&self.xaml);
+        self.layouts.recheck(&self.xaml);
     }
 
     /// Puts back the original colours and layout; the look is off after.

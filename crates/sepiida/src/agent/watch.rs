@@ -135,7 +135,7 @@ mod tests {
             "unrelated file reported"
         );
 
-        fs::write(&file, b"glass = true").expect("write");
+        fs::write(&file, b"material = \"solid\"").expect("write");
         rx.recv_timeout(Duration::from_secs(5))
             .expect("change to the watched file");
     }

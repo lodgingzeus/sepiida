@@ -41,7 +41,7 @@ use sepiida_core::{
         framework::Framework,
         hosts::Host,
         protocol::Command,
-        rules::Role,
+        rules::{Material, Role},
     },
 };
 use tracing::{info, warn};
@@ -75,6 +75,8 @@ pub struct HostStyling {
     events: Sender<Event>,
     /// The colours to attach with; empty while styling is off.
     colors: Vec<(Role, Color)>,
+    /// The look's material, sent before the look.
+    material: Material,
     /// The DLL was made readable to app packages in this run.
     granted: bool,
     /// Processes whose exit is being waited for.
@@ -91,6 +93,7 @@ impl HostStyling {
         Self {
             events,
             colors: Vec::new(),
+            material: Material::default(),
             granted: false,
             watched: HashSet::new(),
             attached: HashMap::new(),
@@ -100,8 +103,9 @@ impl HostStyling {
 
     /// Styling is on with these colours: attaches the hosts kept attached
     /// and sends the colours to every attached host.
-    pub fn sync(&mut self, colors: &[(Role, Color)]) {
+    pub fn sync(&mut self, colors: &[(Role, Color)], material: Material) {
         self.colors = colors.to_vec();
+        self.material = material;
         let Some(dll) = self.dll() else {
             return;
         };
@@ -160,7 +164,7 @@ impl HostStyling {
     /// Sends the colours to `pid` again after each of `RESENDS_AFTER_SHOW`,
     /// from a short-lived thread (posting needs no agent state).
     fn resend_later(&self, pid: u32) {
-        let colors = self.colors.clone();
+        let (colors, material) = (self.colors.clone(), self.material);
         let spawned = thread::Builder::new()
             .name("shell-resend".to_owned())
             .spawn(move || {
@@ -170,7 +174,7 @@ impl HostStyling {
                     waited = at;
                     // No control window yet (still opening) or gone: skip
                     // this round, the next may find one.
-                    let _ = send_style(pid, Framework::System, &colors);
+                    let _ = send_style(pid, Framework::System, &colors, material);
                 }
             });
         if let Err(error) = spawned {
@@ -269,7 +273,7 @@ impl HostStyling {
     }
 
     fn send_colors(&self, host: Host, pid: u32) {
-        match send_style(pid, Framework::System, &self.colors) {
+        match send_style(pid, Framework::System, &self.colors, self.material) {
             Ok(()) => info!(?host, pid, "shell colours and look sent"),
             Err(error) => warn!(?host, pid, "could not send the shell colours: {error}"),
         }
@@ -323,8 +327,8 @@ impl HostStyling {
     }
 }
 
-/// Sends the colours to `framework`'s copy in `pid`, then turns the look
-/// on: a copy of the DLL that is styling shows the full look, without a
+/// Sends the colours and the material to `framework`'s copy in `pid`,
+/// then turns the look on: a copy of the DLL that is styling shows the full look, without a
 /// `shell look on`. Sent with every colour update and re-send, so XAML
 /// threads and processes that came up since (a reopened flyout, a
 /// restarted host) get it too; the DLL ignores it while the look is
@@ -333,10 +337,13 @@ pub fn send_style(
     pid: u32,
     framework: Framework,
     colors: &[(Role, Color)],
+    material: Material,
 ) -> Result<(), ShellHookError> {
     for &(role, color) in colors {
         shell_hook::send(pid, framework, Command::SetColor(role, color))?;
     }
+    // Before the look: its rules for the other material are never written.
+    shell_hook::send(pid, framework, Command::SetMaterial(material))?;
     shell_hook::send(pid, framework, Command::SetLook(true))?;
     Ok(())
 }

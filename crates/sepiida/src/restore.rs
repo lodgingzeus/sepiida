@@ -25,15 +25,15 @@ pub fn run_cli(dry_run: bool) -> Result<()> {
 
 /// Best effort: no shell process or no DLL attached means nothing to
 /// remove. Covers the taskbar, File Explorer and the sandboxed hosts
-/// (Start, quick settings, the notification centre). File Explorer's copy
-/// is restored, not detached: attaching again in the same explorer.exe
-/// has ended it.
+/// (Start, quick settings, the notification centre). explorer.exe's
+/// copies (taskbar, File Explorer) are restored, not detached: attaching
+/// again in the same explorer.exe has ended it.
 fn remove_shell_styling() {
     let mut targets = Vec::new();
     if let Ok(taskbar) = shell_hook::taskbar() {
-        match shell_hook::detach_framework(taskbar.pid, Framework::System) {
-            Ok(0) => {}
+        match shell_hook::send(taskbar.pid, Framework::System, Command::Restore) {
             Ok(_) => println!("taskbar styling removed"),
+            Err(shell_hook::ShellHookError::NotAttached) => {}
             Err(error) => eprintln!("warning: could not remove the taskbar styling: {error}"),
         }
     }

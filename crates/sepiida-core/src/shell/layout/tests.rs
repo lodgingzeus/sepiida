@@ -142,7 +142,7 @@ fn source_ids_follow_xamlom() {
 }
 
 #[test]
-fn an_acrylic_brush_replaces_a_styled_brush_and_never_a_local_one() {
+fn an_acrylic_brush_clears_a_styled_brush_and_holds_a_local_one() {
     const BRUSH: &str = "Windows.UI.Xaml.Media.Brush";
     let acrylic = Value::Acrylic(Role::Surface);
     assert_eq!(
@@ -154,7 +154,10 @@ fn an_acrylic_brush_replaces_a_styled_brush_and_never_a_local_one() {
     );
     assert_eq!(
         plan_write(&acrylic, &current(BRUSH, ValueSource::Local, "x")),
-        Err(Skip::LocalObject)
+        Ok(Write {
+            make: Make::Acrylic(Role::Surface),
+            restore: Restore::Hold,
+        })
     );
     assert!(plan_write(&acrylic, &current(THICKNESS, ValueSource::Other, "0")).is_err());
     assert!(acrylic.is_valid());

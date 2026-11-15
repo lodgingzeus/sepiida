@@ -18,6 +18,7 @@ use sepiida_core::{
     cache::PaletteCache,
     config::Config,
     schedule::{Event, Flow, Scheduler},
+    shell::rules::Material,
 };
 use tracing::{error, info, warn};
 
@@ -264,6 +265,7 @@ struct Applied {
     accent: Option<Color>,
     palette: Palette,
     shell_styling: bool,
+    material: Material,
 }
 
 impl Agent {
@@ -276,7 +278,8 @@ impl Agent {
                 // Also when the registry needed no change: the shell may
                 // have lost its colours (Explorer restart) or need them for
                 // another mode.
-                self.styling.sync(applied.shell_styling, &applied.palette);
+                self.styling
+                    .sync(applied.shell_styling, &applied.palette, applied.material);
                 applied.accent
             }
             Err(error) => {
@@ -324,6 +327,7 @@ impl Agent {
             accent: prepared.accent.map(|accent| accent.accent()),
             palette: prepared.palette,
             shell_styling: config.shell_styling,
+            material: config.material,
         };
         if prepared.pending.is_empty() {
             info!(%origin, %wallpaper, source = %prepared.palette.source, "nothing to change");

@@ -1,8 +1,9 @@
 //! The flyouts: notification centre, calendar and toasts
 //! (ShellExperienceHost), quick settings and media controls (ShellHost).
 //! Both processes use this one set, as Windhawk's notification centre
-//! styler does; each finds only its own elements. The look is WindowGlass
-//! (`window_glass`); the overlays below are only logged.
+//! styler does; each finds only its own elements. The look is
+//! BetterControl11 with our materials (`better_control`) and WindowGlass
+//! for the popups (`window_glass`); the overlays below are only logged.
 
 use super::{rule::Rule, sandboxed::overlay};
 
@@ -32,7 +33,9 @@ mod tests {
         tree.add(1, 0, "ActionCenter.NotificationCenterPage", "");
         tree.add(2, 1, GRID, "NotificationCenterGrid");
         tree.add(3, 2, "ActionCenter.FlexibleItemView", "");
-        tree.add(4, 3, GRID, "");
+        tree.add(9, 3, GRID, "MainGrid");
+        tree.add(10, 9, GRID, "ItemGrid");
+        tree.add(4, 10, GRID, "");
         tree.add(5, 4, BORDER, "ItemOpaquePlating");
         tree.add(
             6,
@@ -58,49 +61,26 @@ mod tests {
     }
 
     #[test]
-    fn cards_get_the_raised_colour_and_round_corners() {
+    fn cards_get_the_raised_colour_and_the_themes_corners() {
         let card = Effect::Color {
             paint: Paint::Solid,
             role: Role::SurfaceRaised,
         };
         assert_eq!(matched("Background", card), [5]);
-        // WindowGlass: panel 20, items 16, plating 12.
+        // BetterControl11: the panel joins the calendar below it.
         let corners = |text| matched("CornerRadius", Effect::Set(Value::Text(text)));
-        assert_eq!(corners("20"), [2]);
-        assert_eq!(corners("16"), [3]);
-        assert_eq!(corners("12"), [5]);
+        assert_eq!(corners("8,8,0,0"), [2]);
+        assert_eq!(corners("6"), [5]);
     }
 
     #[test]
-    fn the_panel_and_only_the_focus_sections_own_grid_get_glass() {
+    fn only_the_panel_gets_glass() {
         let glass = Effect::Set(Value::Blur {
-            amount: 5.0,
+            amount: crate::shell::rules::glass::PANEL_BLUR,
             role: Role::Surface,
-            opacity: 0.7,
+            opacity: crate::shell::rules::glass::PANEL_TINT,
         });
-        assert_eq!(matched("Background", glass), [2, 7]);
-    }
-
-    #[test]
-    fn our_slider_thumb_replaces_the_themes_glass() {
-        let mut tree = ElementTree::new();
-        tree.add(
-            1,
-            0,
-            "Windows.UI.Xaml.Controls.Primitives.Thumb",
-            "HorizontalThumb",
-        );
-        tree.add(2, 1, BORDER, "");
-        let looks: Vec<Effect> = rules_for(Host::ShellHost, Framework::System)
-            .iter()
-            .filter(|r| r.property == "Background" && matches!(r.effect, Effect::Set(_)))
-            .filter(|r| !tree.matching(r).is_empty())
-            .map(|r| r.effect)
-            .collect();
-        assert_eq!(looks.len(), 1);
-        assert!(
-            matches!(looks[0], Effect::Set(Value::Xaml(x)) if x.contains("SystemChromeWhiteColor"))
-        );
+        assert_eq!(matched("Background", glass), [2]);
     }
 
     #[test]

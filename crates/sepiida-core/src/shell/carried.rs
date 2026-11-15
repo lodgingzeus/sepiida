@@ -1,10 +1,14 @@
-//! What an attachment has been told so far: colours, tint opacities and
-//! whether the look is on. Commands arrive on the XAML threads that exist
+//! What an attachment has been told so far: colours, tint opacities,
+//! whether the look is on and its material. Commands arrive on the XAML threads that exist
 //! when they are sent; a thread created later (a File Explorer window
 //! opened after the last command) starts from this, so it is styled like
 //! the rest without sepiida.exe sending everything again.
 
-use super::{protocol::Command, rules::Role, tint::Opacity};
+use super::{
+    protocol::Command,
+    rules::{Material, Role},
+    tint::Opacity,
+};
 use crate::Color;
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -14,6 +18,7 @@ pub struct Carried {
     /// At most one per role; `None` is Windows' own opacity.
     opacities: Vec<(Role, Option<Opacity>)>,
     look: bool,
+    material: Material,
 }
 
 impl Carried {
@@ -25,6 +30,7 @@ impl Carried {
             Command::SetColor(role, color) => set(&mut self.colors, role, color),
             Command::SetTintOpacity(role, opacity) => set(&mut self.opacities, role, opacity),
             Command::SetLook(on) => self.look = on,
+            Command::SetMaterial(material) => self.material = material,
             Command::Restore => *self = Self::default(),
             // Process-wide in the DLL: a new thread already sees it.
             Command::SetGdiAlpha(_) | Command::Detach => {}
@@ -41,6 +47,10 @@ impl Carried {
 
     pub fn look(&self) -> bool {
         self.look
+    }
+
+    pub fn material(&self) -> Material {
+        self.material
     }
 }
 
@@ -92,5 +102,15 @@ mod tests {
         assert_eq!(carried, before);
         carried.record(Command::Restore);
         assert_eq!(carried, Carried::default());
+    }
+
+    #[test]
+    fn the_material_is_glass_until_told_and_restore_forgets_it() {
+        let mut carried = Carried::default();
+        assert_eq!(carried.material(), Material::Glass);
+        carried.record(Command::SetMaterial(Material::Solid));
+        assert_eq!(carried.material(), Material::Solid);
+        carried.record(Command::Restore);
+        assert_eq!(carried.material(), Material::Glass);
     }
 }

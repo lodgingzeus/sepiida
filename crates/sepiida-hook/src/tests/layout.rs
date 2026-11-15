@@ -8,7 +8,7 @@ use sepiida_core::{
     shell::{
         layout::{Value, Visibility},
         protocol::Command,
-        rules::{Effect, Name, RECTANGLE_TYPE, Role, Rule, TASKBAR_FRAME_NAME},
+        rules::{Effect, Material, Name, RECTANGLE_TYPE, Role, Rule, TASKBAR_FRAME_NAME},
     },
 };
 
@@ -22,6 +22,9 @@ const fn look(property: &'static str, value: Value) -> Rule {
         ancestor: Some(TASKBAR_FRAME_NAME),
         parent: None,
         chain: &[],
+        position: None,
+        conditions: &[],
+        material: None,
         property,
         effect: Effect::Set(value),
     }
@@ -223,6 +226,120 @@ fn a_later_rule_on_the_same_property_wins() {
             .count(),
         1
     );
+
+    send(Command::Detach);
+    wait_until("Unadvise", || shared.has("Unadvise"));
+}
+
+static BY_MATERIAL: [Rule; 2] = [
+    Rule {
+        material: Some(Material::Glass),
+        ..look("RadiusX", Value::Length(8.0))
+    },
+    Rule {
+        material: Some(Material::Solid),
+        ..look("RadiusX", Value::Length(12.0))
+    },
+];
+
+#[test]
+fn a_material_switch_puts_one_value_back_before_writing_the_other() {
+    let _serial = serial();
+    crate::host::tests::pretend_with(sepiida_core::shell::hosts::Host::Explorer, &BY_MATERIAL);
+    let (shared, site) = new_fake();
+    let tap = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap.SetSite(&site) }.unwrap();
+    let callback = wait_for_callback(&shared);
+    add_taskbar(&callback);
+    let made = |shared: &Shared, value: &str| {
+        shared
+            .calls()
+            .iter()
+            .filter(|c| {
+                c.starts_with(&format!(
+                    "CreateInstance Windows.Foundation.Double {value} "
+                ))
+            })
+            .count()
+    };
+    let clear = format!("ClearProperty 0x5 {RADIUS_X_INDEX}");
+
+    // Glass until told.
+    send(Command::SetLook(true));
+    assert_eq!((made(&shared, "8"), made(&shared, "12")), (1, 0));
+
+    send(Command::SetMaterial(Material::Solid));
+    assert_eq!(shared.count(&clear), 1);
+    assert_eq!((made(&shared, "8"), made(&shared, "12")), (1, 1));
+    let calls = shared.calls();
+    let cleared = calls.iter().position(|c| *c == clear).expect("cleared");
+    let solid = calls
+        .iter()
+        .position(|c| c.starts_with("CreateInstance Windows.Foundation.Double 12 "))
+        .expect("solid made");
+    assert!(cleared < solid, "the glass value goes before the solid one");
+
+    // The same material again changes nothing; back to glass swaps again.
+    send(Command::SetMaterial(Material::Solid));
+    assert_eq!(made(&shared, "12"), 1);
+    send(Command::SetMaterial(Material::Glass));
+    assert_eq!(shared.count(&clear), 2);
+    assert_eq!(made(&shared, "8"), 2);
+
+    send(Command::Detach);
+    wait_until("Unadvise", || shared.has("Unadvise"));
+}
+
+static PAIR_THEN_ONE: [Rule; 3] = [
+    Rule {
+        material: Some(Material::Glass),
+        ..look("RadiusX", Value::Length(8.0))
+    },
+    Rule {
+        material: Some(Material::Solid),
+        ..look("RadiusX", Value::Length(12.0))
+    },
+    look("RadiusX", Value::Length(16.0)),
+];
+
+#[test]
+fn a_later_rule_for_both_materials_replaces_both_of_a_pair() {
+    let _serial = serial();
+    crate::host::tests::pretend_with(sepiida_core::shell::hosts::Host::Explorer, &PAIR_THEN_ONE);
+    let (shared, site) = new_fake();
+    let tap = new_tap();
+    // SAFETY: plain COM call.
+    unsafe { tap.SetSite(&site) }.unwrap();
+    let callback = wait_for_callback(&shared);
+    add_taskbar(&callback);
+    let made = |shared: &Shared, value: &str| {
+        shared
+            .calls()
+            .iter()
+            .filter(|c| {
+                c.starts_with(&format!(
+                    "CreateInstance Windows.Foundation.Double {value} "
+                ))
+            })
+            .count()
+    };
+    let clear = format!("ClearProperty 0x5 {RADIUS_X_INDEX}");
+
+    send(Command::SetLook(true));
+    send(Command::SetMaterial(Material::Solid));
+    send(Command::SetMaterial(Material::Glass));
+    assert_eq!(
+        (made(&shared, "8"), made(&shared, "12"), made(&shared, "16")),
+        (0, 0, 1)
+    );
+    assert_eq!(
+        shared.count(&clear),
+        0,
+        "the rule for both stays across switches"
+    );
+    send(Command::SetLook(false));
+    assert_eq!(shared.count(&clear), 1);
 
     send(Command::Detach);
     wait_until("Unadvise", || shared.has("Unadvise"));

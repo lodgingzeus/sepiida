@@ -1,71 +1,39 @@
-//! WindowGlass's taskbar details, over our own floating bar and tray pill
-//! (`rules::taskbar`): tray icon padding and corners, rounded app buttons,
-//! a slimmer search box, and glass tooltips, menus, hover thumbnails,
-//! Alt+Tab, virtual desktops and the snap bar. The padding and the search
-//! box change the size of their own buttons only; the bar's end is
-//! measured from the tray's width, so it follows. Left out, because they
-//! move or size the frame, the button row or the tray panel (plan.md, M5
-//! step 3: that crashed Explorer once): every `TaskbarFrame`, `RootGrid`,
-//! `SystemTrayFrame`, tray panel and `:root` line, the widgets button and
-//! the gripper; also the clock's fonts and hidden date, the search box
-//! text, and the theme's `Button` border for every button. The glass is
-//! our own acrylic, proven in Explorer, not the blur brush (not yet run on
-//! Windows).
+//! WindowGlass for the popups explorer.exe shows beside the taskbar:
+//! glass tooltips, menus, hover thumbnails, the overflow flyout, Alt+Tab,
+//! virtual desktops, the snap bar and the confirmation popup. The taskbar
+//! itself is RosePine's (`rose_pine`); WindowGlass's lines for the tray
+//! icons, app buttons and search box are gone (in git), so the two do not
+//! mix. Left out from the start, because they move or size the frame or
+//! the button row (during M5 step 3 that crashed Explorer once): every
+//! `TaskbarFrame`, `RootGrid`, `SystemTrayFrame` and `:root` line, the
+//! widgets button and the gripper; also the clock's fonts and hidden date
+//! and the theme's `Button` border for every button. The glass is our own
+//! acrylic, proven in Explorer.
 
-use super::edge::{PANEL_EDGE, PANEL_EDGE_THICKNESS};
 use crate::shell::framework::Framework;
+use crate::shell::rules::edge::{PANEL_EDGE, PANEL_EDGE_THICKNESS};
 use crate::shell::rules::{
     Role,
     windhawk::{Theme, Var},
 };
 
 const VARS: &[(&str, Var)] = &[
-    ("Background", Var::Acrylic(Role::Surface)),
-    ("BorderBrush", PANEL_EDGE),
     (
-        "ElementBorderBrush",
-        Var::Xaml(
-            "<LinearGradientBrush StartPoint=\"0,0\" EndPoint=\"0,1\"><GradientStop Color=\"#50808080\" Offset=\"1\" /><GradientStop Color=\"#50606060\" Offset=\"0.15\" /></LinearGradientBrush>",
-        ),
+        "Background",
+        Var::Material {
+            glass: &Var::Acrylic(Role::Surface),
+            solid: &Var::Fill(Role::Surface),
+        },
     ),
-    ("ElementBorderThickness", Var::Text("0.3,0.3,0.3,1")),
-    ("ElementCornerRadius", Var::Text("12")),
+    ("BorderBrush", PANEL_EDGE),
     ("BorderThickness", PANEL_EDGE_THICKNESS),
     ("CornerRadius", Var::Text("25")),
-    ("TrayPadding", Var::Text("2,4,2,4")),
 ];
 
 pub const TASKBAR: Theme = Theme {
     framework: Framework::System,
+    material: None,
     targets: &[
-        (
-            "SystemTray.ChevronIconView",
-            &["Padding=6,0,6,0", "CornerRadius=8", "Margin=2,0,0,0"],
-        ),
-        (
-            "SystemTray.NotifyIconView#NotifyItemIcon",
-            &["Padding=6,0,6,0", "CornerRadius=8", "Margin=2,0,0,0"],
-        ),
-        (
-            "SystemTray.OmniButton",
-            &["Padding=6,0,6,0", "CornerRadius=8", "Margin=2,0,0,0"],
-        ),
-        (
-            "SystemTray.CopilotIcon",
-            &["Padding=6,0,6,0", "Margin=2,0,0,0"],
-        ),
-        (
-            "SystemTray.OmniButton#NotificationCenterButton > Grid > ContentPresenter > ItemsPresenter > StackPanel > ContentPresenter > SystemTray.IconView#SystemTrayIcon > Grid",
-            &["Padding=$TrayPadding"],
-        ),
-        (
-            "SystemTray.IconView#SystemTrayIcon > Grid#ContainerGrid > ContentPresenter#ContentPresenter > Grid#ContentGrid > SystemTray.TextIconContent > Grid#ContainerGrid",
-            &["Padding=10", "CornerRadius=10"],
-        ),
-        (
-            "SystemTray.StackListView#IconStack > ItemsPresenter > StackPanel > ContentPresenter > SystemTray.IconView#SystemTrayIcon",
-            &["Padding=0"],
-        ),
         (
             "Windows.UI.Xaml.Controls.Grid#ConfirmatorMainGrid",
             &[
@@ -106,10 +74,6 @@ pub const TASKBAR: Theme = Theme {
             &["Background:=Transparent"],
         ),
         (
-            "Taskbar.TaskListButton#TaskListButton",
-            &["CornerRadius=10"],
-        ),
-        (
             "Windows.UI.Xaml.Controls.Border#SnapBarBorder",
             &[
                 "Background:=$Background",
@@ -130,16 +94,6 @@ pub const TASKBAR: Theme = Theme {
             ],
         ),
         (
-            "Windows.UI.Xaml.Controls.Border#SearchPillBackgroundElement",
-            &[
-                "BorderBrush:=$ElementBorderBrush",
-                "CornerRadius=$ElementCornerRadius",
-                "BorderThickness=$ElementBorderThickness",
-                "MaxWidth:=100",
-                "Width=Auto",
-            ],
-        ),
-        (
             "Windows.UI.Xaml.Controls.ToolTip > Windows.UI.Xaml.Controls.ContentPresenter#LayoutRoot",
             &[
                 "Background:=$Background",
@@ -147,10 +101,6 @@ pub const TASKBAR: Theme = Theme {
                 "BorderThickness:=$BorderThickness",
                 "CornerRadius=12",
             ],
-        ),
-        (
-            "SearchUx.SearchUI.SearchButtonControl",
-            &["MaxWidth:=300", "MinWidth:=10", "Width=Auto", "Margin=0"],
         ),
         (
             "WindowsInternal.ComposableShell.Experiences.Switcher.VirtualDesktopBarElement > Windows.UI.Xaml.Controls.Grid#GridElement > Windows.UI.Xaml.Controls.Border#VirtualDesktopSwitcherBackground",
@@ -197,6 +147,7 @@ pub const TASKBAR: Theme = Theme {
 /// take the taskbar's own fill; this one takes only the flyout's.
 pub const TASKBAR_ADDITIONS: Theme = Theme {
     framework: Framework::System,
+    material: None,
     targets: &[(
         "Taskbar.TaskbarBackground#HoverFlyoutBackgroundControl > Grid > Rectangle#BackgroundFill",
         &["Fill:=$Background"],

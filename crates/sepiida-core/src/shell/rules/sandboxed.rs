@@ -17,6 +17,9 @@ pub(super) const fn tinted(
         ancestor: None,
         parent: None,
         chain: &[],
+        position: None,
+        conditions: &[],
+        material: None,
         property: "Background",
         effect: Effect::Color {
             paint: Paint::Tint,

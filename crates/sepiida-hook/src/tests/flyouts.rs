@@ -17,7 +17,7 @@ use super::{add, fake::*, new_tap, send, serial, wait_for_callback, wait_until};
 use crate::xamlom::*;
 
 const PLATING: InstanceHandle = 40;
-/// The plating's parent: WindowGlass selects `Grid > Border#ItemOpaquePlating`.
+/// The plating's parent: our materials select `Grid > Border#ItemOpaquePlating`.
 const CARD_GRID: InstanceHandle = 39;
 /// Windows' shared card brush, and the one it puts back after a switch.
 const WINDOWS_CARD: InstanceHandle = 0x500;
@@ -99,12 +99,17 @@ fn a_card_that_appears_while_the_look_is_on_gets_round_corners() {
     let corners = format!("SetProperty {PLATING:#x} {CORNER_RADIUS_INDEX} ");
     assert!(!shared.calls().iter().any(|c| c.starts_with(&corners)));
 
-    add(&callback, PLATING, 30, BORDER_TYPE, "ItemOpaquePlating");
+    // BetterControl11 selects the card's plating by its full place.
+    add(&callback, 31, 30, "ActionCenter.FlexibleItemView", "");
+    add(&callback, 32, 31, GRID_TYPE, "MainGrid");
+    add(&callback, 33, 32, GRID_TYPE, "ItemGrid");
+    add(&callback, 34, 33, GRID_TYPE, "");
+    add(&callback, PLATING, 34, BORDER_TYPE, "ItemOpaquePlating");
     assert!(
         shared
             .calls()
             .iter()
-            .any(|c| c.starts_with("CreateInstance Windows.UI.Xaml.CornerRadius 12,12,12,12"))
+            .any(|c| c.starts_with("CreateInstance Windows.UI.Xaml.CornerRadius 6,6,6,6"))
     );
     assert!(shared.calls().iter().any(|c| c.starts_with(&corners)));
 
