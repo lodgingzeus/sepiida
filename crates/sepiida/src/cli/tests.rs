@@ -247,7 +247,7 @@ fn default_settings_use_auto_and_leave_the_mode_alone() {
             source: SourceChoice::Auto,
             mode: ModeSetting::Unchanged,
             accent: true,
-            locked_color: None,
+            color: ColorChoice::default(),
         }
     );
 }
@@ -265,7 +265,7 @@ fn command_line_options_override_the_settings_file() {
     assert_eq!(from_file.source, SourceChoice::WallpaperEngine);
     assert_eq!(from_file.mode, ModeSetting::Light);
     assert!(!from_file.accent);
-    assert_eq!(from_file.locked_color, Some(Color::new(1, 2, 3)));
+    assert_eq!(from_file.color.custom, Some(Color::new(1, 2, 3)));
 
     let options = ApplyOptions {
         source: Some(SourceChoice::Windows),

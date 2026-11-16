@@ -3934,6 +3934,7 @@ dependencies = [
  "const-field-offset",
  "i-slint-backend-linuxkms",
  "i-slint-backend-selector",
+ "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",
@@ -4541,6 +4542,18 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ui-snapshot"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "anyhow",
+ "i-slint-core",
+ "image",
+ "sepiida-core",
+ "slint",
+ "slint-build",
 ]
 
 [[package]]

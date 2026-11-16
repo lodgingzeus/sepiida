@@ -3,6 +3,7 @@
 use sepiida_core::{
     Color,
     accent::ThemeMode,
+    choice::ColorChoice,
     config::{Config, ModeSetting},
     shell::{hosts::Host, protocol::MAX_CONNECTION, tint::Opacity},
     source::SourceChoice,
@@ -154,13 +155,13 @@ pub struct ApplyOptions {
     not(windows),
     allow(dead_code, reason = "`apply` only runs on Windows")
 )]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplySettings {
     pub source: SourceChoice,
     /// Resolved against the wallpaper's lightness once it is known.
     pub mode: ModeSetting,
     pub accent: bool,
-    pub locked_color: Option<Color>,
+    pub color: ColorChoice,
 }
 
 impl ApplyOptions {
@@ -173,7 +174,7 @@ impl ApplyOptions {
             source: self.source.unwrap_or(config.source),
             mode: self.mode.map_or(config.mode, ModeSetting::from),
             accent: config.accent,
-            locked_color: config.locked_color,
+            color: config.color_choice(),
         }
     }
 }

@@ -1,15 +1,15 @@
 //! On-disk palette cache, keyed by wallpaper file, modification time and
 //! size.
 //!
-//! Only the source colour and the lightness are stored: the rest of the
-//! palette is rebuilt from them, which is cheap. The file is sepiida's own, but it is still read
+//! Only the candidate colours and the lightness are stored: the rest of
+//! the palette is rebuilt from them, which is cheap. The file is sepiida's own, but it is still read
 //! defensively; anything wrong with it just means an empty cache.
 
 use std::{io, path::Path, time::UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Color, Palette, fsio, source::Wallpaper};
+use crate::{Candidates, Color, MAX_CANDIDATES, Palette, fsio, source::Wallpaper};
 
 /// Enough for a large slideshow folder. Oldest entries go first.
 const MAX_ENTRIES: usize = 256;
@@ -17,7 +17,7 @@ const MAX_ENTRIES: usize = 256;
 const MAX_CACHE_BYTES: u64 = 1024 * 1024;
 /// Bumped whenever the colour extraction changes, so old results are
 /// dropped instead of reused.
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 4;
 
 /// Identifies one version of one wallpaper file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,7 +58,8 @@ impl CacheKey {
 struct Entry {
     #[serde(flatten)]
     key: CacheKey,
-    source: Color,
+    /// Best first; see `Candidates`.
+    candidates: Vec<Color>,
     lightness: u8,
 }
 
@@ -120,7 +121,13 @@ impl PaletteCache {
             .iter()
             .rev()
             .find(|entry| &entry.key == key)
-            .map(|entry| Palette::from_parts(entry.source, entry.lightness))
+            .and_then(|entry| {
+                let candidates = entry.candidates.iter().take(MAX_CANDIDATES).copied();
+                Some(Palette::from_parts(
+                    Candidates::from_colors(candidates)?,
+                    entry.lightness,
+                ))
+            })
     }
 
     pub fn insert(&mut self, key: CacheKey, palette: &Palette) {
@@ -134,7 +141,7 @@ impl PaletteCache {
         }
         self.entries.push(Entry {
             key,
-            source: palette.source,
+            candidates: palette.candidates.as_slice().to_vec(),
             lightness: palette.lightness,
         });
         self.dirty = true;
@@ -295,7 +302,7 @@ mod tests {
 
         // Swap the cached colour to prove the second call used the cache.
         let fake = Color::new(1, 2, 3);
-        cache.entries[0].source = fake;
+        cache.entries[0].candidates = vec![fake];
         assert_eq!(cache.palette(&wallpaper).expect("cached").source, fake);
 
         // A different file at the same path gets a new key (its size

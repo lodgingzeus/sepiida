@@ -11,7 +11,14 @@ use std::{io, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Color, accent::ThemeMode, fsio, shell::rules::Material, source::SourceChoice};
+use crate::{
+    Color, Style,
+    accent::ThemeMode,
+    choice::{ColorChoice, WallpaperPick},
+    fsio,
+    shell::rules::Material,
+    source::SourceChoice,
+};
 
 /// A hand-edited settings file is a few hundred bytes.
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
@@ -67,9 +74,15 @@ pub struct Config {
     pub shell_styling: bool,
     /// The look's material: glass (translucent) or solid.
     pub material: Material,
-    /// When set, this colour is used instead of the wallpaper's.
+    /// How the palette treats its colour.
+    pub style: Style,
+    /// A custom colour, used instead of the wallpaper's. (The name is from
+    /// before custom colours, when this only "locked" the palette.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locked_color: Option<Color>,
+    /// Another of the wallpaper's colours, for that wallpaper only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wallpaper_pick: Option<WallpaperPick>,
 }
 
 impl Default for Config {
@@ -80,7 +93,9 @@ impl Default for Config {
             accent: true,
             shell_styling: false,
             material: Material::Glass,
+            style: Style::default(),
             locked_color: None,
+            wallpaper_pick: None,
         }
     }
 }
@@ -98,6 +113,14 @@ pub enum ConfigError {
 }
 
 impl Config {
+    pub fn color_choice(&self) -> ColorChoice {
+        ColorChoice {
+            style: self.style,
+            custom: self.locked_color,
+            pick: self.wallpaper_pick.clone(),
+        }
+    }
+
     pub fn from_toml(text: &str) -> Result<Self, ConfigError> {
         Ok(toml::from_str(text)?)
     }
@@ -135,6 +158,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::Wallpaper;
 
     #[test]
     fn defaults_only_write_the_accent_colour() {
@@ -146,6 +170,8 @@ mod tests {
         assert!(!config.shell_styling);
         assert_eq!(config.material, Material::Glass);
         assert_eq!(config.locked_color, None);
+        assert_eq!(config.style, Style::Soft);
+        assert_eq!(config.wallpaper_pick, None);
     }
 
     #[test]
@@ -167,17 +193,27 @@ mod tests {
 
     #[test]
     fn round_trips_every_field() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let picture = dir.path().join("dusk.jpg");
+        std::fs::write(&picture, b"picture").expect("write file");
         let config = Config {
             source: SourceChoice::WallpaperEngine,
             mode: ModeSetting::Dark,
             accent: false,
             shell_styling: true,
             material: Material::Solid,
+            style: Style::Vivid,
             locked_color: Some(Color::new(0x12, 0xab, 0xef)),
+            wallpaper_pick: WallpaperPick::new(
+                &Wallpaper::Image(picture.clone()),
+                Color::new(1, 2, 3),
+            ),
         };
+        assert!(config.wallpaper_pick.is_some());
         let text = config.to_toml().expect("encode");
         assert!(text.contains("source = \"wallpaper-engine\""), "{text}");
         assert!(text.contains("locked-color = \"#12abef\""), "{text}");
+        assert!(text.contains("style = \"vivid\""), "{text}");
         assert_eq!(Config::from_toml(&text).expect("parse"), config);
     }
 
@@ -200,6 +236,8 @@ mod tests {
             "mode = \"auto\"",
             "accent = \"yes\"",
             "locked-color = \"red\"",
+            "style = \"loud\"",
+            "wallpaper-pick = 3",
             "source = ",
         ] {
             assert!(

@@ -25,7 +25,7 @@ use crate::{
 /// Where the palette came from.
 #[derive(Debug)]
 pub enum Origin {
-    /// The user locked the palette to this colour.
+    /// The user's custom colour.
     Locked,
     Wallpaper(Resolved),
 }
@@ -52,15 +52,31 @@ impl Prepared {
 }
 
 pub fn prepare(settings: &ApplySettings, cache: &mut PaletteCache) -> Result<Prepared> {
-    let (origin, palette) = match settings.locked_color {
-        Some(color) => (Origin::Locked, Palette::from_color(color)),
-        None => {
-            let resolved = resolve(settings.source, &WindowsWallpaper, &WallpaperEngine)?;
-            let palette = cache
-                .palette(&resolved.wallpaper)
-                .context("could not derive a palette from the wallpaper")?;
-            (Origin::Wallpaper(resolved), palette)
-        }
+    let custom = settings.color.custom;
+    // A custom colour needs no wallpaper, but uses its lightness when the
+    // wallpaper can be read.
+    let wallpaper = match resolve(settings.source, &WindowsWallpaper, &WallpaperEngine) {
+        Ok(resolved) => match cache.palette(&resolved.wallpaper) {
+            Ok(palette) => Some((resolved, palette)),
+            Err(_) if custom.is_some() => None,
+            Err(error) => {
+                return Err(error).context("could not derive a palette from the wallpaper");
+            }
+        },
+        Err(_) if custom.is_some() => None,
+        Err(error) => return Err(error.into()),
+    };
+    let palette = settings
+        .color
+        .palette(
+            wallpaper
+                .as_ref()
+                .map(|(resolved, palette)| (&resolved.wallpaper, palette)),
+        )
+        .context("no wallpaper palette and no custom colour")?;
+    let origin = match wallpaper {
+        Some((resolved, _)) if custom.is_none() => Origin::Wallpaper(resolved),
+        _ => Origin::Locked,
     };
 
     let accent = settings

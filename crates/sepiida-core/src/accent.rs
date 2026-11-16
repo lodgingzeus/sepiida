@@ -418,4 +418,27 @@ mod tests {
         assert!(chroma(accent) > NEUTRAL_CHROMA, "got {accent}");
         assert!(accent.g > accent.r && accent.b > accent.r, "got {accent}");
     }
+
+    #[test]
+    fn styles_reach_the_windows_accent() {
+        use crate::Style;
+        let p = Palette::from_color(Color::new(200, 60, 40));
+        let accent =
+            |style| chroma(AccentValues::from_palette(&p.with_choice(p.source, style)).accent());
+        let (neutral, soft, vivid) = (
+            accent(Style::Neutral),
+            accent(Style::Soft),
+            accent(Style::Vivid),
+        );
+        assert!(
+            neutral < soft && soft < vivid,
+            "neutral {neutral}, soft {soft}, vivid {vivid}"
+        );
+
+        let grey = Palette::from_color(Color::new(128, 128, 128));
+        for style in Style::ALL {
+            let got = AccentValues::from_palette(&grey.with_choice(grey.source, style)).accent();
+            assert!(chroma(got) < NEUTRAL_CHROMA, "{style:?} gave {got}");
+        }
+    }
 }

@@ -1,0 +1,111 @@
+// A small desktop: the wallpaper with the taskbar and an open Start menu in
+// the colours the shell gets.
+export struct ShellColors {
+    surface: color,
+    card: color,
+    accent: color,
+}
+
+export component DesktopPreview inherits Rectangle {
+    in property <image> wallpaper;
+    in property <bool> has-wallpaper;
+    // Shown when there is no picture: a solid-colour background.
+    in property <color> wallpaper-color: #404040;
+    in property <ShellColors> shell;
+    // Whether the shell draws dark: the mode it will get, which can differ
+    // from this window's.
+    in property <bool> dark;
+    // Glass makes the shell translucent; off shows Windows' own look.
+    in property <bool> glass: true;
+    in property <bool> styled: true;
+
+    property <float> shell-alpha: root.glass ? 0.78 : 1.0;
+    property <color> surface: root.styled ? root.shell.surface : (root.dark ? #202020 : #eeeeee);
+    property <color> card: root.styled ? root.shell.card : (root.dark ? #2c2c2c : #f9f9f9);
+    property <color> ink: root.dark ? #ffffff : #000000;
+
+    border-radius: 16px;
+    background: #1d1b1a;
+    accessible-role: image;
+    accessible-label: "Preview of the taskbar and Start in these colours";
+
+    screen := Rectangle {
+        x: 10px;
+        y: 10px;
+        width: root.width - 20px;
+        height: root.height - 20px;
+        border-radius: 8px;
+        clip: true;
+        background: root.wallpaper-color;
+
+        if root.has-wallpaper: Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.wallpaper;
+            image-fit: cover;
+        }
+
+        // Start menu.
+        Rectangle {
+            width: 220px;
+            height: 168px;
+            x: (parent.width - self.width) / 2;
+            y: parent.height - 30px - 8px - self.height;
+            border-radius: 10px;
+            background: root.surface.with-alpha(root.shell-alpha);
+            border-width: 1px;
+            border-color: root.ink.with-alpha(0.12);
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 10px;
+                Rectangle {
+                    height: 16px;
+                    border-radius: 8px;
+                    background: root.card.with-alpha(0.9);
+                }
+                GridLayout {
+                    spacing: 8px;
+                    Row {
+                        Rectangle { height: 22px; border-radius: 6px; background: root.shell.accent; }
+                        Rectangle { height: 22px; border-radius: 6px; background: root.ink.with-alpha(0.25); }
+                        Rectangle { height: 22px; border-radius: 6px; background: root.ink.with-alpha(0.25); }
+                        Rectangle { height: 22px; border-radius: 6px; background: root.ink.with-alpha(0.25); }
+                        Rectangle { height: 22px; border-radius: 6px; background: root.ink.with-alpha(0.25); }
+                    }
+                    Row {
+                        Rectangle { height: 22px; border-radius: 6px; background: root.ink.with-alpha(0.25); }
+                        Rectangle { height: 22px; border-radius: 6px; background: root.ink.with-alpha(0.25); }
+                        Rectangle { height: 22px; border-radius: 6px; background: root.shell.accent.with-alpha(0.7); }
+                        Rectangle { height: 22px; border-radius: 6px; background: root.ink.with-alpha(0.25); }
+                        Rectangle { height: 22px; border-radius: 6px; background: root.ink.with-alpha(0.25); }
+                    }
+                }
+                Rectangle { }
+                Rectangle {
+                    height: 28px;
+                    border-radius: 14px;
+                    background: root.card.with-alpha(0.8);
+                }
+            }
+        }
+
+        // Taskbar.
+        Rectangle {
+            y: parent.height - self.height;
+            height: 30px;
+            background: root.surface.with-alpha(root.shell-alpha);
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: 6px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                Rectangle { width: 14px; border-radius: 4px; background: root.shell.accent; }
+                Rectangle { width: 14px; border-radius: 4px; background: root.ink.with-alpha(0.4); }
+                Rectangle { width: 14px; border-radius: 4px; background: root.ink.with-alpha(0.4); }
+                Rectangle { width: 14px; border-radius: 4px; background: root.ink.with-alpha(0.4); }
+            }
+        }
+    }
+}

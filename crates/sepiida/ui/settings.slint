@@ -1,152 +1,342 @@
-import { ComboBox, GroupBox, Switch, VerticalBox, HorizontalBox } from "std-widgets.slint";
+// The settings window ("Wallpaper & style"). Every control writes
+// config.toml straight away, except the custom colour, which is saved
+// only when chosen; a running agent picks the change up from there. The
+// option orders must match `gui/settings/model.rs`.
+import { ScrollView } from "std-widgets.slint";
+import { Theme, WindowColors } from "settings/theme.slint";
+import { Segmented, Toggle, ChoiceChip } from "settings/controls.slint";
+import { ChipColors, PaletteChip, CustomChip } from "settings/swatches.slint";
+import { DesktopPreview, ShellColors } from "settings/preview.slint";
+import { ColorPicker } from "settings/picker.slint";
 
-component Swatch inherits Rectangle {
+export { Theme, WindowColors, ChipColors, ShellColors }
+
+component SectionTitle inherits Text {
+    font-size: 14px;
+    font-weight: 600;
+    color: Theme.c.text;
+}
+
+component SettingRow inherits Rectangle {
     in property <string> label;
-    in property <color> label-color: #ffffff;
-    height: 56px;
-    border-radius: 8px;
-    border-width: 1px;
-    border-color: #80808060;
-    animate background { duration: 300ms; easing: ease-in-out; }
+    height: 48px;
 
-    Text {
-        text: root.label;
-        x: 6px;
-        y: parent.height - self.height - 4px;
-        font-size: 11px;
-        color: root.label-color;
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Theme.c.outline;
+        opacity: 0.6;
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+        Text {
+            horizontal-stretch: 1;
+            text: root.label;
+            font-size: 13px;
+            color: Theme.c.text;
+            vertical-alignment: center;
+        }
+        @children
     }
 }
 
-// The settings window. Every control writes config.toml straight away; a
-// running agent picks the change up from there. The drop-down orders must
-// match `settings_model.rs`.
 export component SettingsWindow inherits Window {
-    title: "sepiida settings";
+    title: "sepiida";
     icon: @image-url("../assets/sepiida-256.png");
-    preferred-width: 460px;
-    min-width: 360px;
+    preferred-width: 880px;
+    preferred-height: 600px;
+    min-width: 720px;
+    min-height: 520px;
+    // Flipped by Rust after the window is restored from minimised: Windows
+    // drops the pixels then, and Slint 1.18's software renderer repaints
+    // only what changed. A background change repaints the whole window;
+    // the alpha step (255 to 254) does not show.
+    in-out property <bool> repaint-flip;
+    background: root.repaint-flip ? Theme.c.background.with-alpha(0.996) : Theme.c.background;
 
-    // Palette preview, filled in from Rust once the wallpaper is read.
-    in property <color> preview-source: #808080;
-    in property <color> preview-accent: #808080;
-    in property <color> preview-light-surface: #f0f0f0;
-    in property <color> preview-dark-surface: #202020;
-    // Black or white, picked in Rust from each swatch's lightness.
-    in property <color> preview-source-label: #ffffff;
-    in property <color> preview-accent-label: #ffffff;
-    in property <color> preview-light-surface-label: #000000;
-    in property <color> preview-dark-surface-label: #ffffff;
+    // Preview, filled in from Rust once the wallpaper is read.
+    in property <image> wallpaper;
+    in property <bool> has-wallpaper;
+    in property <color> wallpaper-color: #404040;
+    // The shell's colours in the mode it will get.
+    in property <ShellColors> shell;
+    in property <bool> shell-dark;
     in property <string> preview-text: "Reading the wallpaper…";
 
-    in-out property <int> source-index;
+    // The wallpaper's colours as chips, and which is in use (-1: custom).
+    in property <[ChipColors]> candidates;
+    in-out property <int> candidate-index;
+    in property <bool> has-custom;
+    in property <color> custom-color;
+
+    in-out property <int> style-index;
+    // Whether sepiida sets light/dark at all, and to what.
+    in-out property <bool> mode-enabled;
     in-out property <int> mode-index;
+    in-out property <int> look-index;
+    in-out property <int> source-index;
     in-out property <bool> accent-enabled: true;
-    in-out property <bool> shell-styling: false;
-    in-out property <bool> glass: true;
-    in-out property <bool> locked;
-    in property <string> locked-text;
     in-out property <bool> start-with-windows;
     in property <string> status;
 
+    // The custom colour picker.
+    in-out property <bool> picker-open;
+    in-out property <float> picker-hue;
+    in-out property <float> picker-colourfulness;
+    in property <color> picker-color;
+    in property <color> picker-grey;
+    in property <color> picker-vivid;
+    in property <[color]> picker-hue-stops;
+    in-out property <string> picker-hex;
+    in property <string> picker-error;
+
+    callback candidate-chosen(int);
+    callback open-picker();
+    callback picker-moved();
+    callback picker-hex-entered(string);
+    callback picker-use();
+    callback picker-cancel();
+    callback style-changed(int);
+    callback mode-changed();
+    callback look-changed(int);
     callback source-changed(int);
-    callback mode-changed(int);
     callback accent-toggled(bool);
-    callback shell-styling-toggled(bool);
-    callback glass-toggled(bool);
-    callback lock-toggled(bool);
     callback start-with-windows-toggled(bool);
 
-    VerticalBox {
-        alignment: start;
+    property <[string]> style-names: ["Faithful", "Soft", "Vivid", "Neutral"];
+    property <[string]> style-notes: [
+        "Keeps the wallpaper's own colour.",
+        "Calm, slightly muted colours.",
+        "Bolder than the wallpaper.",
+        "Almost grey, with a hint of colour.",
+    ];
 
-        GroupBox {
-            title: "Palette";
-            VerticalBox {
-                padding: 0;
-                HorizontalBox {
-                    padding: 0;
-                    Swatch {
-                        background: root.preview-source;
-                        label: "Wallpaper";
-                        label-color: root.preview-source-label;
-                    }
-                    Swatch {
-                        background: root.preview-accent;
-                        label: "Accent";
-                        label-color: root.preview-accent-label;
-                    }
-                    Swatch {
-                        background: root.preview-light-surface;
-                        label: "Light";
-                        label-color: root.preview-light-surface-label;
-                    }
-                    Swatch {
-                        background: root.preview-dark-surface;
-                        label: "Dark";
-                        label-color: root.preview-dark-surface-label;
-                    }
-                }
-                Text { text: root.preview-text; wrap: word-wrap; }
-            }
-        }
+    ScrollView {
+        VerticalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-bottom: 16px;
+            spacing: 4px;
 
-        GroupBox {
-            title: "Wallpaper source";
-            ComboBox {
-                model: ["Automatic", "Windows wallpaper", "Wallpaper Engine"];
-                current-index <=> root.source-index;
-                selected => { root.source-changed(self.current-index); }
-            }
-        }
-
-        GroupBox {
-            title: "Light and dark mode";
-            ComboBox {
-                model: ["Leave as it is", "Always light", "Always dark", "Follow the wallpaper"];
-                current-index <=> root.mode-index;
-                selected => { root.mode-changed(self.current-index); }
-            }
-        }
-
-        GroupBox {
-            title: "Colours";
-            VerticalBox {
-                padding: 0;
-                Switch {
-                    text: "Set the Windows accent colour";
-                    checked <=> root.accent-enabled;
-                    toggled => { root.accent-toggled(self.checked); }
+            HorizontalLayout {
+                height: 56px;
+                spacing: 10px;
+                Rectangle {
+                    width: 14px;
+                    height: 14px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: self.width / 2;
+                    background: Theme.c.accent;
                 }
-                Switch {
-                    text: root.locked ? "Palette locked to " + root.locked-text : "Lock the current palette";
-                    checked <=> root.locked;
-                    toggled => { root.lock-toggled(self.checked); }
+                Text {
+                    text: "Wallpaper & style";
+                    font-size: 17px;
+                    font-weight: 600;
+                    color: Theme.c.text;
+                    vertical-alignment: center;
                 }
-                Switch {
-                    text: "Restyle the taskbar, Start and flyouts (experimental)";
-                    checked <=> root.shell-styling;
-                    toggled => { root.shell-styling-toggled(self.checked); }
-                }
-                Switch {
-                    text: root.glass ? "Glass: translucent surfaces" : "Glass off: solid surfaces";
-                    checked <=> root.glass;
-                    enabled: root.shell-styling;
-                    toggled => { root.glass-toggled(self.checked); }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: "sepiida";
+                    font-size: 12px;
+                    color: Theme.c.muted-text;
+                    vertical-alignment: center;
                 }
             }
-        }
 
-        Switch {
-            text: "Start with Windows";
-            checked <=> root.start-with-windows;
-            toggled => { root.start-with-windows-toggled(self.checked); }
-        }
+            HorizontalLayout {
+                spacing: 28px;
+                alignment: start;
 
-        Text {
-            text: root.status;
-            wrap: word-wrap;
-            visible: root.status != "";
+                VerticalLayout {
+                    min-width: 300px;
+                    max-width: 420px;
+                    preferred-width: 420px;
+                    horizontal-stretch: 1;
+                    spacing: 12px;
+                    alignment: start;
+
+                    DesktopPreview {
+                        height: 268px;
+                        wallpaper: root.wallpaper;
+                        has-wallpaper: root.has-wallpaper;
+                        wallpaper-color: root.wallpaper-color;
+                        shell: root.shell;
+                        dark: root.shell-dark;
+                        glass: root.look-index == 0;
+                        styled: root.look-index != 2;
+                    }
+
+                    Text {
+                        text: root.preview-text;
+                        font-size: 12px;
+                        color: Theme.c.muted-text;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Set light and dark mode";
+                                font-size: 12px;
+                                color: Theme.c.muted-text;
+                            }
+                            if !root.mode-enabled: Text {
+                                text: "Off: Windows keeps its own setting.";
+                                font-size: 11px;
+                                color: Theme.c.muted-text;
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Toggle {
+                            y: (parent.height - self.height) / 2;
+                            label: "Set light and dark mode";
+                            checked <=> root.mode-enabled;
+                            toggled => { root.mode-changed(); }
+                        }
+                    }
+                    Segmented {
+                        options: ["Light", "Dark", "Match wallpaper"];
+                        enabled: root.mode-enabled;
+                        current <=> root.mode-index;
+                        selected => { root.mode-changed(); }
+                    }
+
+                    Text {
+                        text: "Taskbar, Start and quick settings";
+                        font-size: 12px;
+                        color: Theme.c.muted-text;
+                    }
+                    Segmented {
+                        options: ["Glass", "Solid", "Off"];
+                        current <=> root.look-index;
+                        selected(i) => { root.look-changed(i); }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 20px;
+                    alignment: start;
+                    horizontal-stretch: 1;
+                    min-width: 340px;
+
+                    VerticalLayout {
+                        spacing: 12px;
+                        SectionTitle { text: "Wallpaper colours"; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            for chip[i] in root.candidates: PaletteChip {
+                                colors: chip;
+                                label: "Wallpaper colour " + (i + 1);
+                                selected: i == root.candidate-index;
+                                clicked => { root.candidate-chosen(i); }
+                            }
+                            CustomChip {
+                                label: "Your own colour";
+                                has-color: root.has-custom;
+                                swatch: root.custom-color;
+                                selected: (root.has-custom && root.candidate-index == -1) || root.picker-open;
+                                clicked => { root.open-picker(); }
+                            }
+                        }
+                    }
+
+                    if root.picker-open: ColorPicker {
+                        hue <=> root.picker-hue;
+                        colourfulness <=> root.picker-colourfulness;
+                        swatch: root.picker-color;
+                        grey: root.picker-grey;
+                        vivid: root.picker-vivid;
+                        hue-stops: root.picker-hue-stops;
+                        hex <=> root.picker-hex;
+                        error: root.picker-error;
+                        moved => { root.picker-moved(); }
+                        hex-entered(text) => { root.picker-hex-entered(text); }
+                        use-color => { root.picker-use(); }
+                        cancel => { root.picker-cancel(); }
+                    }
+
+                    VerticalLayout {
+                        spacing: 12px;
+                        SectionTitle { text: "Style"; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            for name[i] in root.style-names: ChoiceChip {
+                                text: name;
+                                selected: i == root.style-index;
+                                clicked => {
+                                    root.style-index = i;
+                                    root.style-changed(i);
+                                }
+                            }
+                        }
+                        Text {
+                            text: root.style-notes[root.style-index];
+                            font-size: 12px;
+                            color: Theme.c.muted-text;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    Rectangle {
+                        border-radius: 16px;
+                        background: Theme.c.card;
+                        VerticalLayout {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            padding-top: 4px;
+                            padding-bottom: 4px;
+                            VerticalLayout {
+                                padding-top: 12px;
+                                padding-bottom: 12px;
+                                spacing: 8px;
+                                Text {
+                                    text: "Colours come from";
+                                    font-size: 13px;
+                                    color: Theme.c.text;
+                                }
+                                Segmented {
+                                    options: ["Auto", "Windows", "Wallpaper Engine"];
+                                    current <=> root.source-index;
+                                    selected(i) => { root.source-changed(i); }
+                                }
+                            }
+                            SettingRow {
+                                label: "Windows accent colour";
+                                Toggle {
+                                    y: 12px;
+                                    label: "Windows accent colour";
+                                    checked <=> root.accent-enabled;
+                                    toggled(on) => { root.accent-toggled(on); }
+                                }
+                            }
+                            SettingRow {
+                                label: "Start with Windows";
+                                Toggle {
+                                    y: 12px;
+                                    label: "Start with Windows";
+                                    checked <=> root.start-with-windows;
+                                    toggled(on) => { root.start-with-windows-toggled(on); }
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: root.status;
+                        visible: root.status != "";
+                        font-size: 12px;
+                        color: Theme.c.text;
+                        wrap: word-wrap;
+                    }
+                }
+            }
         }
     }
 }

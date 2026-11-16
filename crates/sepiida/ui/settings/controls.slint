@@ -1,0 +1,203 @@
+// Small controls drawn in the window's own colours.
+import { Theme } from "theme.slint";
+
+// A row of mutually exclusive options in a rounded track.
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> current;
+    in property <bool> enabled: true;
+    callback selected(int);
+
+    height: 36px;
+    border-radius: self.height / 2;
+    background: Theme.c.chip;
+    opacity: root.enabled ? 1 : 0.5;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+        for option[i] in root.options: Rectangle {
+            horizontal-stretch: 1;
+            min-width: label.preferred-width + 20px;
+            border-radius: self.height / 2;
+            background: i == root.current ? Theme.c.accent : area.has-hover && root.enabled ? Theme.c.outline : transparent;
+            animate background { duration: 120ms; }
+            accessible-role: button;
+            accessible-label: option;
+            accessible-checked: i == root.current;
+            accessible-action-default => { area.clicked(); }
+
+            label := Text {
+                text: option;
+                font-size: 13px;
+                color: i == root.current ? Theme.c.on-accent : Theme.c.text;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            area := TouchArea {
+                enabled: root.enabled;
+                clicked => {
+                    root.current = i;
+                    root.selected(i);
+                }
+            }
+        }
+    }
+}
+
+// An on/off switch.
+export component Toggle inherits Rectangle {
+    in-out property <bool> checked;
+    in property <string> label;
+    callback toggled(bool);
+
+    width: 44px;
+    height: 24px;
+    border-radius: self.height / 2;
+    background: root.checked ? Theme.c.accent : transparent;
+    border-width: root.checked ? 0 : 1.5px;
+    border-color: Theme.c.muted-text;
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-checked: root.checked;
+    accessible-action-default => { area.clicked(); }
+
+    Rectangle {
+        width: root.checked ? 16px : 12px;
+        height: self.width;
+        border-radius: self.width / 2;
+        x: root.checked ? root.width - self.width - 4px : 6px;
+        y: (root.height - self.height) / 2;
+        background: root.checked ? Theme.c.on-accent : Theme.c.muted-text;
+        animate x, width { duration: 150ms; easing: ease-out; }
+    }
+
+    area := TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+// A labelled choice: filled when selected, outlined otherwise.
+export component ChoiceChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+
+    height: 34px;
+    min-width: row.preferred-width;
+    border-radius: 10px;
+    background: root.selected ? Theme.c.chip : area.has-hover ? Theme.c.card : transparent;
+    border-width: root.selected ? 0 : 1px;
+    border-color: Theme.c.outline;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checked: root.selected;
+    accessible-action-default => { area.clicked(); }
+
+    row := HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 6px;
+        alignment: center;
+        if root.selected: Text {
+            text: "✓";
+            font-size: 13px;
+            color: Theme.c.text;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.text;
+            font-size: 13px;
+            color: Theme.c.text;
+            vertical-alignment: center;
+        }
+    }
+
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// A plain button; `primary` fills it with the accent.
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary;
+    callback clicked;
+
+    height: 36px;
+    min-width: label.preferred-width + 32px;
+    border-radius: self.height / 2;
+    background: root.primary ? Theme.c.accent : area.has-hover ? Theme.c.card : transparent;
+    border-width: root.primary ? 0 : 1px;
+    border-color: Theme.c.outline;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { area.clicked(); }
+
+    label := Text {
+        text: root.text;
+        font-size: 13px;
+        color: root.primary ? Theme.c.on-accent : Theme.c.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// A slider over a coloured track, for the custom colour picker.
+export component GradientSlider inherits Rectangle {
+    in property <brush> track;
+    in property <string> label;
+    in-out property <float> value;
+    callback changed(float);
+    callback released(float);
+
+    height: 28px;
+    accessible-role: slider;
+    accessible-label: root.label;
+    accessible-value: round(root.value * 100) + " %";
+
+    Rectangle {
+        y: (root.height - self.height) / 2;
+        height: 12px;
+        border-radius: self.height / 2;
+        background: root.track;
+    }
+
+    Rectangle {
+        width: 22px;
+        height: 22px;
+        border-radius: self.width / 2;
+        x: (root.width - self.width) * root.value;
+        y: (root.height - self.height) / 2;
+        background: #ffffff;
+        border-width: 2px;
+        border-color: #00000059;
+    }
+
+    area := TouchArea {
+        function set-from-pointer() {
+            root.value = clamp(self.mouse-x / root.width, 0, 1);
+            root.changed(root.value);
+        }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                self.set-from-pointer();
+            } else if event.kind == PointerEventKind.up {
+                root.released(root.value);
+            }
+        }
+        moved => {
+            if self.pressed {
+                self.set-from-pointer();
+            }
+        }
+    }
+}

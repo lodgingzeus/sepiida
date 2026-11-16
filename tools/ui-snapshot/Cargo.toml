@@ -1,0 +1,20 @@
+[package]
+name = "ui-snapshot"
+description = "Renders the settings window to a PNG with sample data, for checking the layout without Windows."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+image.workspace = true
+sepiida-core.workspace = true
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-systemfonts", "software-renderer-path"] }
+# The winit backend turns these on for the real app; this tool has no
+# backend, so it asks Slint's core for them directly.
+i-slint-core = { version = "1.18", features = ["image-decoders", "svg"] }
+
+[build-dependencies]
+slint-build.workspace = true

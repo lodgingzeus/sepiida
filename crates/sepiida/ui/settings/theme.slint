@@ -1,0 +1,29 @@
+// The settings window's colours. Rust fills both sets from the palette in
+// effect (`settings_look::WindowColors`); the window picks the one that
+// matches Windows' app mode.
+import { Palette } from "std-widgets.slint";
+
+export struct WindowColors {
+    background: color,
+    card: color,
+    chip: color,
+    outline: color,
+    text: color,
+    muted-text: color,
+    accent: color,
+    on-accent: color,
+}
+
+export global Theme {
+    in property <WindowColors> light: {
+        background: #fbf8f6, card: #f3eeeb, chip: #e7dfdb, outline: #cfc6c2,
+        text: #1c1b1a, muted-text: #4c4644, accent: #6a5a52, on-accent: #ffffff,
+    };
+    in property <WindowColors> dark: {
+        background: #141210, card: #1f1c1a, chip: #3a3532, outline: #4d4744,
+        text: #ece6e3, muted-text: #c2bab6, accent: #d6c2b8, on-accent: #3a2e28,
+    };
+    // Follows Windows; the snapshot tool sets it to draw the dark look.
+    in-out property <bool> is-dark: Palette.color-scheme == ColorScheme.dark;
+    out property <WindowColors> c: self.is-dark ? self.dark : self.light;
+}

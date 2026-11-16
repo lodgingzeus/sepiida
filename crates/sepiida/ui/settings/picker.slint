@@ -1,0 +1,113 @@
+// Choose a colour of your own: hue and colourfulness (the accent ignores
+// brightness, so there is no brightness control), or a hex code.
+import { Theme } from "theme.slint";
+import { Button, GradientSlider } from "controls.slint";
+
+export component ColorPicker inherits Rectangle {
+    // 0..1 positions of the two sliders.
+    in-out property <float> hue;
+    in-out property <float> colourfulness;
+    // The colour at the current position, and its hex code; set by Rust.
+    in property <color> swatch;
+    in-out property <string> hex;
+    // Colours along the hue track, left to right; set by Rust.
+    in property <[color]> hue-stops: [#e0507a, #d9732e, #a99a1e, #3fae5a, #1aa9a2, #4a8be0, #9a6be0, #e0507a];
+    // Ends of the colourfulness track at the current hue; set by Rust.
+    in property <color> grey;
+    in property <color> vivid;
+    in property <string> error;
+
+    callback moved();
+    callback hex-entered(string);
+    callback use-color();
+    callback cancel();
+
+    border-radius: 16px;
+    background: Theme.c.card;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        Text {
+            text: "Your own colour";
+            font-size: 14px;
+            font-weight: 600;
+            color: Theme.c.text;
+        }
+
+        HorizontalLayout {
+            spacing: 16px;
+
+            Rectangle {
+                width: 56px;
+                height: 56px;
+                border-radius: self.width / 2;
+                background: root.swatch;
+                border-width: 1px;
+                border-color: Theme.c.outline;
+            }
+
+            VerticalLayout {
+                spacing: 6px;
+                alignment: center;
+                GradientSlider {
+                    label: "Hue";
+                    value <=> root.hue;
+                    track: @linear-gradient(90deg,
+                        root.hue-stops[0] 0%, root.hue-stops[1] 14.3%, root.hue-stops[2] 28.6%,
+                        root.hue-stops[3] 42.9%, root.hue-stops[4] 57.1%, root.hue-stops[5] 71.4%,
+                        root.hue-stops[6] 85.7%, root.hue-stops[7] 100%);
+                    changed => { root.moved(); }
+                }
+                GradientSlider {
+                    label: "Colourfulness";
+                    value <=> root.colourfulness;
+                    track: @linear-gradient(90deg, root.grey 0%, root.vivid 100%);
+                    changed => { root.moved(); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle {
+                width: 116px;
+                height: 36px;
+                border-radius: 10px;
+                background: Theme.c.background;
+                border-width: input.has-focus ? 2px : 1px;
+                border-color: input.has-focus ? Theme.c.accent : Theme.c.outline;
+                input := TextInput {
+                    x: 12px;
+                    width: parent.width - 24px;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text <=> root.hex;
+                    font-size: 13px;
+                    color: Theme.c.text;
+                    single-line: true;
+                    accessible-label: "Hex colour code";
+                    accepted => { root.hex-entered(self.text); }
+                }
+            }
+            Text {
+                text: root.error;
+                font-size: 12px;
+                color: Theme.c.muted-text;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: "Cancel";
+                clicked => { root.cancel(); }
+            }
+            Button {
+                text: "Use this colour";
+                primary: true;
+                clicked => { root.use-color(); }
+            }
+        }
+    }
+}

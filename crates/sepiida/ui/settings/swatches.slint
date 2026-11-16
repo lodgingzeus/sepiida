@@ -1,0 +1,76 @@
+// The palette choices: one round chip per colour found in the wallpaper,
+// split like Android's wallpaper colours, plus the custom colour chip.
+import { Theme } from "theme.slint";
+
+// The three colours a chip shows: the accent on top, the light and dark
+// surfaces below.
+export struct ChipColors {
+    accent: color,
+    light: color,
+    dark: color,
+}
+
+component ChipFrame inherits Rectangle {
+    in property <bool> selected;
+    in property <string> label;
+    callback clicked;
+
+    width: 64px;
+    height: 64px;
+    border-radius: 20px;
+    background: root.selected ? Theme.c.chip : area.has-hover ? Theme.c.card : transparent;
+    border-width: root.selected ? 2px : 0;
+    border-color: Theme.c.accent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-checked: root.selected;
+    accessible-action-default => { area.clicked(); }
+
+    @children
+
+    area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component PaletteChip inherits ChipFrame {
+    in property <ChipColors> colors;
+
+    // Circle segments as paths: the software renderer does not clip
+    // children (or gradients) to rounded corners.
+    for part in [
+        { fill: root.colors.accent, commands: "M 0 23 A 23 23 0 0 1 46 23 Z" },
+        { fill: root.colors.light, commands: "M 23 23 L 0 23 A 23 23 0 0 0 23 46 Z" },
+        { fill: root.colors.dark, commands: "M 23 23 L 23 46 A 23 23 0 0 0 46 23 Z" },
+    ]: Path {
+        width: 46px;
+        height: 46px;
+        viewbox-width: 46;
+        viewbox-height: 46;
+        commands: part.commands;
+        fill: part.fill;
+    }
+}
+
+// Shows the custom colour once there is one, a "+" before that.
+export component CustomChip inherits ChipFrame {
+    in property <bool> has-color;
+    in property <color> swatch;
+
+    Rectangle {
+        width: 46px;
+        height: 46px;
+        border-radius: self.width / 2;
+        background: root.has-color ? root.swatch : transparent;
+        border-width: root.has-color ? 0 : 1.5px;
+        border-color: Theme.c.outline;
+
+        Text {
+            text: root.has-color ? "✎" : "+";
+            font-size: root.has-color ? 16px : 22px;
+            color: root.has-color ? (root.swatch.to-hsv().value > 0.6 ? #000000 : #ffffff) : Theme.c.muted-text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

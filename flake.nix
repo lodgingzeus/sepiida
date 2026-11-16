@@ -41,7 +41,13 @@
               pkgs.llvmPackages.lld
               pkgs.llvmPackages.llvm
               pkgs.slint-lsp
+              # tools/ui-snapshot renders the settings window on Linux with
+              # the system fonts, found through fontconfig.
+              pkgs.pkg-config
+              pkgs.fontconfig
+              pkgs.dejavu_fonts
             ];
+            FONTCONFIG_FILE = pkgs.makeFontsConf { fontDirectories = [ pkgs.inter pkgs.dejavu_fonts ]; };
           };
         }
       );
